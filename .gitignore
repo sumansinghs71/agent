@@ -31,3 +31,20 @@ build/
 
 ### VS Code ###
 .vscode/
+
+
+# .gitignore content for Java
+*.class
+*.log
+*.jar
+*.war
+*.ear
+target/
+bin/
+build/
+out/
+.idea/
+*.iml
+*.db
+.DS_Store
+
