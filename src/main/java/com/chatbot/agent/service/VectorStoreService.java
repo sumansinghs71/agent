@@ -46,20 +46,29 @@ public class VectorStoreService {
     private void indexToPgVector(Long chatbotId, Long documentId, List<String> chunks) {
         String sql = "INSERT INTO document_vectors (chatbot_id, document_id, chunk_index, chunk_text, embedding) VALUES (?, ?, ?, ?, ?)";
 
-        for (int i = 0; i < chunks.size(); i++) {
-            String chunk = chunks.get(i);
-            float[] embedding = ollamaService.generateEmbedding(chunk);
+        // Precompute embeddings and PGobjects
+        List<float[]> embeddings = chunks.stream()
+                .map(ollamaService::generateEmbedding)
+                .collect(Collectors.toList());
+        List<PGobject> pgVectors = embeddings.stream()
+                .map(this::toPGVector)
+                .collect(Collectors.toList());
 
-            int finalI = i;
-            vectorJdbcTemplate.update(sql, ps -> {
+        vectorJdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement ps, int i) throws SQLException {
                 ps.setLong(1, chatbotId);
                 ps.setLong(2, documentId);
-                ps.setInt(3, finalI);
-                ps.setString(4, chunk);
-                PGobject pgVector = toPGVector(embedding); // Move inside lambda
-                ps.setObject(5, pgVector);
-            });
-        }
+                ps.setInt(3, i);
+                ps.setString(4, chunks.get(i));
+                ps.setObject(5, pgVectors.get(i));
+            }
+
+            @Override
+            public int getBatchSize() {
+                return chunks.size();
+            }
+        });
     }
 
 

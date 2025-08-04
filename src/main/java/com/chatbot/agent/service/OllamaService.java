@@ -2,10 +2,10 @@ package com.chatbot.agent.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Data;
 import org.apache.hc.core5.util.Timeout;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -15,7 +15,6 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +31,7 @@ public class OllamaService {
     @Value("${llama.generation-model}")
     private String generationModel;
 
+    private static final Logger log = LoggerFactory.getLogger(OllamaService.class);
 
     private final RestTemplate restTemplate;
 
@@ -95,7 +95,7 @@ public class OllamaService {
                 return embedding;
             }
         } catch (Exception e) {
-            // log.error("Failed to generate embedding: {}", e.getMessage());
+            log.error("Failed to generate embedding: {}", e.getMessage());
         }
         throw new RuntimeException("Failed to generate embedding");
     }
@@ -146,25 +146,11 @@ public class OllamaService {
                 }
             }
         } catch (ResourceAccessException e) {
+            log.error("Request timed out. Please try again: {}", e.getMessage());
             return "Request timed out. Please try again.";
         } catch (Exception e) {
-            // Log error
+            log.error("Failed to generate embedding: {}", e.getMessage());
         }
         return "I couldn't generate a response. Please try again later.";
-    }
-
-    private List<Integer> tokenizeText(String text) {
-        try {
-            String tokenizeUrl = baseUrl + "/api/tokenize";
-            Map<String, String> request = Map.of("content", text);
-
-            TokenizeResponse response = restTemplate.postForObject(
-                    tokenizeUrl, request, TokenizeResponse.class);
-
-            return response != null ? response.getTokens() : Collections.emptyList();
-        } catch (Exception e) {
-            // log.warn("Failed to tokenize text: {}", e.getMessage());
-            return Collections.emptyList();
-        }
     }
 }

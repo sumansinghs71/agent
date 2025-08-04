@@ -8,17 +8,29 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class ChatbotService {
 
     private final ChatbotRepository chatbotRepository;
     private final DataSourceRepository dataSourceRepository;
+    private final AiRouterService aiRouterService;
+    private final VectorStoreService vectorStoreService;
+    private final AzureSearchService azureSearchService;
+    private static final Logger log = LoggerFactory.getLogger(ChatbotService.class);
 
     public ChatbotService(ChatbotRepository chatbotRepository,
-                          DataSourceRepository dataSourceRepository) {
+                          DataSourceRepository dataSourceRepository,
+                          AiRouterService aiRouterService,
+                          VectorStoreService vectorStoreService,
+                          AzureSearchService azureSearchService) {
         this.chatbotRepository = chatbotRepository;
         this.dataSourceRepository = dataSourceRepository;
+        this.aiRouterService = aiRouterService;
+        this.vectorStoreService = vectorStoreService;
+        this.azureSearchService = azureSearchService;
     }
 
     /**
@@ -112,5 +124,33 @@ public class ChatbotService {
         chatbotRepository.update(existing);
 
         return existing;
+    }
+
+    /**
+     * Handles chat logic based on the chatbot ID and message
+     *
+     * @param chatbotId The ID of the chatbot
+     * @param message   The message to process
+     * @return The response from the chatbot
+     */
+    public String handleChat(Long chatbotId, String message) {
+        log.info("Handling chat for chatbotId: {}", chatbotId);
+        Model.Chatbot chatbot = getChatbot(chatbotId);
+        if (chatbot.getModelType() == Model.ModelType.LLAMA) {
+            log.info("Using LLAMA flow for chatbotId: {}", chatbotId);
+            return vectorStoreService.searchAndGenerateResponse(chatbotId, message);
+        } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+            log.info("Using Azure OpenAI flow for chatbotId: {}", chatbotId);
+            // Get top 5 relevant chunks from Azure Search
+            var contextChunks = azureSearchService.searchRelevantChunks(chatbotId, message, 5);
+            StringBuilder context = new StringBuilder();
+            for (String chunk : contextChunks) {
+                context.append(chunk).append("\n\n");
+            }
+            return aiRouterService.callAzureOpenAiWithContext(message, context.toString());
+        } else {
+            log.warn("Unsupported chatbot type for chatbotId: {}", chatbotId);
+            return "Unsupported chatbot type";
+        }
     }
 }
