@@ -2,6 +2,7 @@ package com.chatbot.agent.service;
 
 import com.chatbot.agent.model.Model;
 import com.chatbot.agent.repository.DocumentRepository;
+import com.chatbot.agent.repository.ChatbotRepository;
 import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
@@ -16,6 +17,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 
 import java.io.*;
 import java.nio.file.*;
@@ -40,14 +43,20 @@ public class DocumentService {
     private final VectorStoreService vectorStoreService;
     private final DocumentRepository documentRepository;
     private final Tika tika;
+    private final ChatbotRepository chatbotRepository;
+    private final AzureSearchService azureSearchService;
 
     @Autowired
     public DocumentService(VectorStoreService vectorStoreService,
                            DocumentRepository documentRepository,
-                           Tika tika) {
+                           Tika tika,
+                           ChatbotRepository chatbotRepository,
+                           AzureSearchService azureSearchService) {
         this.vectorStoreService = vectorStoreService;
         this.documentRepository = documentRepository;
         this.tika = tika;
+        this.chatbotRepository = chatbotRepository;
+        this.azureSearchService = azureSearchService;
     }
 
     public Model.Document uploadDocument(Long chatbotId, MultipartFile file) throws IOException {
@@ -83,7 +92,6 @@ public class DocumentService {
 
             // Chunk text and stream index
             streamChunksToVectorStore(extractedText, document);
-
             document.setStatus(Model.DocumentStatus.INDEXED);
             documentRepository.updateStatus(document.getId(), document.getStatus());
             log.info("Document {} successfully indexed", document.getFileName());
@@ -99,9 +107,18 @@ public class DocumentService {
         File file = new File(filePath);
         if (!file.exists()) throw new IOException("File not found: " + filePath);
 
+        boolean isDocx = filePath.toLowerCase().endsWith(".docx");
         try {
             if (!filePath.toLowerCase().endsWith(".pdf")) {
-                return extractTextWithTika(file);
+                String tikaText = extractTextWithTika(file);
+                if (isDocx && (tikaText == null || tikaText.trim().isEmpty())) {
+                    log.warn("Tika failed to extract text from .docx, trying POI fallback");
+                    String poiText = extractTextWithPOIDocx(file);
+                    if (poiText != null && !poiText.trim().isEmpty()) {
+                        return poiText;
+                    }
+                }
+                return tikaText;
             }
             return extractTextWithPDFBoxPaged(file);
         } catch (Exception e1) {
@@ -139,21 +156,30 @@ public class DocumentService {
         return sb.toString();
     }
 
+    private String extractTextWithPOIDocx(File file) {
+        try (FileInputStream fis = new FileInputStream(file);
+             XWPFDocument doc = new XWPFDocument(fis);
+             XWPFWordExtractor extractor = new XWPFWordExtractor(doc)) {
+            return extractor.getText();
+        } catch (Exception e) {
+            log.error("POI failed to extract text from .docx: {}", file.getName(), e);
+            return "";
+        }
+    }
+
     private void streamChunksToVectorStore(String text, Model.Document document) throws SQLException {
         Pattern sentencePattern = Pattern.compile("(?s)(.{1," + chunkSize + "}(?<=\\.|\\n|\\r))");
         Matcher matcher = sentencePattern.matcher(text);
 
-        int chunkIndex = 0;
-        int lastEnd = 0;
         List<String> chunks = new ArrayList<>();
+        int lastEnd = 0;
 
         while (matcher.find()) {
             int start = matcher.start();
             int end = matcher.end();
             String chunk = text.substring(start, end).trim();
-
             if (!chunk.isEmpty()) {
-                vectorStoreService.indexSingleChunk(document.getChatbotId(), document.getId(), chunkIndex++, chunk);
+                chunks.add(chunk);
                 lastEnd = end;
             }
         }
@@ -162,11 +188,22 @@ public class DocumentService {
         if (lastEnd < text.length()) {
             String lastChunk = text.substring(lastEnd).trim();
             if (!lastChunk.isEmpty()) {
-                vectorStoreService.indexSingleChunk(document.getChatbotId(), document.getId(), chunkIndex, lastChunk);
+                chunks.add(lastChunk);
             }
+        }
+
+        // Determine where to upload based on chatbot type
+        Model.Chatbot chatbot = chatbotRepository.findById(document.getChatbotId())
+                .orElseThrow(() -> new RuntimeException("Chatbot not found with id: " + document.getChatbotId()));
+        if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+            azureSearchService.uploadChunksToAzureSearch(document.getChatbotId(), document.getId(), chunks);
+        } else {
+            vectorStoreService.indexDocument(document.getChatbotId(), document.getId(), chunks);
         }
 
         // Help GC
         text = null;
     }
+
+
 }

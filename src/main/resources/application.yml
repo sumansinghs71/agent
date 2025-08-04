@@ -25,7 +25,7 @@
       api-version: 2021-04-30
       search-endpoint: https://chatbot-search-sst.search.windows.net
       search-key: ${AZURE_SEARCH_API_KEY}
-      search-index: chatbot-index
+      search-index: chatbot-indexx
 
   llama:
     base-url: http://localhost:11434
