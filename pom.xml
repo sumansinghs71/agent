@@ -87,6 +87,11 @@
 		<artifactId>httpclient5</artifactId>
 		<version>5.2.1</version> <!-- or the latest version -->
 	</dependency>
+	<dependency>
+		<groupId>com.azure</groupId>
+		<artifactId>azure-search-documents</artifactId>
+		<version>11.6.0</version>
+	</dependency>
 
 </dependencies>
 

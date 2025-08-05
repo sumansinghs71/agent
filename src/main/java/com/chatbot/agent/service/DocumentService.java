@@ -12,6 +12,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
@@ -60,6 +61,8 @@ public class DocumentService {
     }
 
     public Model.Document uploadDocument(Long chatbotId, MultipartFile file) throws IOException {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] DocumentService.uploadDocument request: chatbotId={}, fileName={}", requestId, chatbotId, file != null ? file.getOriginalFilename() : null);
         Path uploadPath = Paths.get(uploadDir);
         if (!Files.exists(uploadPath)) {
             Files.createDirectories(uploadPath);
@@ -76,27 +79,30 @@ public class DocumentService {
         document.setStatus(Model.DocumentStatus.UPLOADED);
         Model.Document savedDocument = documentRepository.save(document);
 
+        log.info("[requestId={}] DocumentService.uploadDocument success: chatbotId={}, documentId={}", requestId, chatbotId, document.getId());
         processDocumentAsync(savedDocument);
         return document;
     }
 
     @Async
     public void processDocumentAsync(Model.Document document) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] DocumentService.processDocumentAsync request: documentId={}, fileName={}", requestId, document.getId(), document.getFileName());
         try {
             document.setStatus(Model.DocumentStatus.PROCESSING);
             documentRepository.updateStatus(document.getId(), document.getStatus());
 
             // Extract text
             String extractedText = extractText(document.getFilePath());
-            log.info("Extracted {} characters from {}", extractedText.length(), document.getFileName());
+            log.info("[requestId={}] Extracted {} characters from {}", requestId, extractedText.length(), document.getFileName());
 
             // Chunk text and stream index
             streamChunksToVectorStore(extractedText, document);
             document.setStatus(Model.DocumentStatus.INDEXED);
             documentRepository.updateStatus(document.getId(), document.getStatus());
-            log.info("Document {} successfully indexed", document.getFileName());
+            log.info("[requestId={}] Document {} successfully indexed", requestId, document.getFileName());
         } catch (Exception e) {
-            log.error("Document processing failed for {}", document.getFileName(), e);
+            log.error("[requestId={}] Document processing failed for {}", requestId, document.getFileName(), e);
             document.setStatus(Model.DocumentStatus.FAILED);
             documentRepository.updateStatus(document.getId(), document.getStatus());
         }
@@ -168,7 +174,14 @@ public class DocumentService {
     }
 
     private void streamChunksToVectorStore(String text, Model.Document document) throws SQLException {
-        Pattern sentencePattern = Pattern.compile("(?s)(.{1," + chunkSize + "}(?<=\\.|\\n|\\r))");
+        String requestId = MDC.get("requestId");
+        if (text == null || text.isEmpty()) {
+            log.warn("[requestId={}] Text is empty for document {}", requestId, document.getId());
+            return;
+        }
+        log.info("[requestId={}] DocumentService.streamChunksToVectorStore request: documentId={}, text.length={}", requestId, document.getId(), text != null ? text.length() : 0);
+        //Pattern sentencePattern = Pattern.compile("(?s)(.{1," + chunkSize + "}(?<=\\.|\\n|\\r))");
+        Pattern sentencePattern = Pattern.compile("(.{1," + chunkSize + "}(?<=\\s|\\n|\\r|(?<=[.!?])))");
         Matcher matcher = sentencePattern.matcher(text);
 
         List<String> chunks = new ArrayList<>();
@@ -196,8 +209,10 @@ public class DocumentService {
         Model.Chatbot chatbot = chatbotRepository.findById(document.getChatbotId())
                 .orElseThrow(() -> new RuntimeException("Chatbot not found with id: " + document.getChatbotId()));
         if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+            log.info("[requestId={}] DocumentService.streamChunksToVectorStore uploading to AzureSearchService: chatbotId={}, documentId={}, chunks.size={}", requestId, document.getChatbotId(), document.getId(), chunks.size());
             azureSearchService.uploadChunksToAzureSearch(document.getChatbotId(), document.getId(), chunks);
         } else {
+            log.info("[requestId={}] DocumentService.streamChunksToVectorStore uploading to VectorStoreService: chatbotId={}, documentId={}, chunks.size={}", requestId, document.getChatbotId(), document.getId(), chunks.size());
             vectorStoreService.indexDocument(document.getChatbotId(), document.getId(), chunks);
         }
 
