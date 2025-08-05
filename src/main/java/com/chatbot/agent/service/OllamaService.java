@@ -6,6 +6,7 @@ import lombok.Data;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -79,14 +80,17 @@ public class OllamaService {
     }
 
     public float[] generateEmbedding(String text) {
+        String requestId = MDC.get("requestId");
         String url = baseUrl + "/api/embeddings";
 
         EmbeddingRequest request = new EmbeddingRequest();
         request.setModel(embeddingModel);
         request.setPrompt(text);
 
+        log.info("[requestId={}] OllamaService.generateEmbedding request: url={}, body={}", requestId, url, request);
         try {
             EmbeddingResponse response = restTemplate.postForObject(url, request, EmbeddingResponse.class);
+            log.info("[requestId={}] OllamaService.generateEmbedding response: {}", requestId, response);
             if (response != null && response.getEmbedding() != null) {
                 float[] embedding = new float[response.getEmbedding().size()];
                 for (int i = 0; i < response.getEmbedding().size(); i++) {
@@ -95,12 +99,13 @@ public class OllamaService {
                 return embedding;
             }
         } catch (Exception e) {
-            log.error("Failed to generate embedding: {}", e.getMessage());
+            log.error("[requestId={}] Failed to generate embedding: {}", requestId, e.getMessage(), e);
         }
         throw new RuntimeException("Failed to generate embedding");
     }
 
     public String generateResponse(String prompt, String contextText) {
+        String requestId = MDC.get("requestId");
         try {
             // 1. Truncate context to last 15,000 characters
             if (contextText.length() > 15000) {
@@ -130,6 +135,7 @@ public class OllamaService {
 
             // 5. Send request
             String url = baseUrl + "/api/generate";
+            log.info("[requestId={}] OllamaService.generateResponse request: url={}, body={}", requestId, url, request);
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     url,
                     HttpMethod.POST,
@@ -137,6 +143,7 @@ public class OllamaService {
                     new ParameterizedTypeReference<Map<String, Object>>() {},
                     Timeout.of(Duration.ofSeconds(30))
             );
+            log.info("[requestId={}] OllamaService.generateResponse response: {}", requestId, response.getBody());
 
             // 6. Process response
             if (response.getStatusCode().is2xxSuccessful()) {
@@ -146,10 +153,10 @@ public class OllamaService {
                 }
             }
         } catch (ResourceAccessException e) {
-            log.error("Request timed out. Please try again: {}", e.getMessage());
+            log.error("[requestId={}] Request timed out. Please try again: {}", requestId, e.getMessage(), e);
             return "Request timed out. Please try again.";
         } catch (Exception e) {
-            log.error("Failed to generate embedding: {}", e.getMessage());
+            log.error("[requestId={}] Failed to generate response: {}", requestId, e.getMessage(), e);
         }
         return "I couldn't generate a response. Please try again later.";
     }

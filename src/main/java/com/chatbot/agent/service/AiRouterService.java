@@ -11,8 +11,14 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+
 @Service
 public class AiRouterService {
+
+    private static final Logger log = LoggerFactory.getLogger(AiRouterService.class);
 
     @Value("${azure.openai.base-url}")
     private String azureOpenAiUrl;
@@ -57,6 +63,7 @@ public class AiRouterService {
     }
 
     private String callAzureOpenAi(String prompt) {
+        String requestId = MDC.get("requestId");
         HttpHeaders headers = new HttpHeaders();
         headers.set("api-key", azureApiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -80,19 +87,25 @@ public class AiRouterService {
         String url = String.format("%s/openai/deployments/%s/chat/completions?api-version=2025-01-01-preview",
                 azureOpenAiUrl, deploymentName);
 
+        log.info("[requestId={}] AiRouterService.callAzureOpenAi request: url={}, body={}", requestId, url, request);
         ResponseEntity<Map> response = restTemplate.exchange(
                 url, HttpMethod.POST, entity, Map.class);
-
+        log.info("[requestId={}] AiRouterService.callAzureOpenAi response: {}", requestId, response.getBody());
         return extractChatCompletionText(response.getBody());
     }
 
     private String callLlama(String prompt) {
+        String requestId = MDC.get("requestId");
         String url = llamaUrl + "/generate";
         String requestBody = String.format("{\"text\": \"%s\"}", prompt);
-        return restTemplate.postForObject(url, requestBody, String.class);
+        log.info("[requestId={}] AiRouterService.callLlama request: url={}, body={}", requestId, url, requestBody);
+        String response = restTemplate.postForObject(url, requestBody, String.class);
+        log.info("[requestId={}] AiRouterService.callLlama response: {}", requestId, response);
+        return response;
     }
 
     public String callAzureOpenAiWithContext(String question, String context) {
+        String requestId = MDC.get("requestId");
         HttpHeaders headers = new HttpHeaders();
         headers.set("api-key", azureApiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -117,9 +130,10 @@ public class AiRouterService {
         String url = String.format("%s/openai/deployments/%s/chat/completions?api-version=2025-01-01-preview",
                 azureOpenAiUrl, deploymentName);
 
+        log.info("[requestId={}] AiRouterService.callAzureOpenAiWithContext request: url={}, body={}", requestId, url, request);
         ResponseEntity<Map> response = restTemplate.exchange(
                 url, HttpMethod.POST, entity, Map.class);
-
+        log.info("[requestId={}] AiRouterService.callAzureOpenAiWithContext response: {}", requestId, response.getBody());
         return extractChatCompletionText(response.getBody());
     }
 
