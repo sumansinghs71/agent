@@ -16,21 +16,25 @@ public class ChatbotService {
 
     private final ChatbotRepository chatbotRepository;
     private final DataSourceRepository dataSourceRepository;
-    private final AiRouterService aiRouterService;
-    private final VectorStoreService vectorStoreService;
-    private final AzureSearchService azureSearchService;
+    private final ReasoningAgentService reasoningAgentService;
+//    private final AiRouterService aiRouterService;
+//    private final VectorStoreService vectorStoreService;
+//    private final AzureSearchService azureSearchService;
     private static final Logger log = LoggerFactory.getLogger(ChatbotService.class);
 
     public ChatbotService(ChatbotRepository chatbotRepository,
                           DataSourceRepository dataSourceRepository,
-                          AiRouterService aiRouterService,
-                          VectorStoreService vectorStoreService,
-                          AzureSearchService azureSearchService) {
+                          ReasoningAgentService reasoningAgentService
+//                          AiRouterService aiRouterService,
+//                          VectorStoreService vectorStoreService,
+//                          AzureSearchService azureSearchService
+    ) {
         this.chatbotRepository = chatbotRepository;
         this.dataSourceRepository = dataSourceRepository;
-        this.aiRouterService = aiRouterService;
-        this.vectorStoreService = vectorStoreService;
-        this.azureSearchService = azureSearchService;
+        this.reasoningAgentService = reasoningAgentService;
+//        this.aiRouterService = aiRouterService;
+//        this.vectorStoreService = vectorStoreService;
+//        this.azureSearchService = azureSearchService;
     }
 
     /**
@@ -133,24 +137,35 @@ public class ChatbotService {
      * @param message   The message to process
      * @return The response from the chatbot
      */
+//    public String handleChat(Long chatbotId, String message) {
+//        log.info("Handling chat for chatbotId: {}", chatbotId);
+//        Model.Chatbot chatbot = getChatbot(chatbotId);
+//        if (chatbot.getModelType() == Model.ModelType.LLAMA) {
+//            log.info("Using LLAMA flow for chatbotId: {}", chatbotId);
+//            return vectorStoreService.searchAndGenerateResponse(chatbotId, message);
+//        } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+//            log.info("Using Azure OpenAI flow for chatbotId: {}", chatbotId);
+//            // Get top 5 relevant chunks from Azure Search
+//            var contextChunks = azureSearchService.searchRelevantChunks(chatbotId, message, 5);
+//            StringBuilder context = new StringBuilder();
+//            for (String chunk : contextChunks) {
+//                context.append(chunk).append("\n\n");
+//            }
+//            return aiRouterService.callAzureOpenAiWithContext(message, context.toString());
+//        } else {
+//            log.warn("Unsupported chatbot type for chatbotId: {}", chatbotId);
+//            return "Unsupported chatbot type";
+//        }
+//    }
+
+    /**
+     * Main chat handler - uses reasoning agent to decide action
+     */
     public String handleChat(Long chatbotId, String message) {
-        log.info("Handling chat for chatbotId: {}", chatbotId);
-        Model.Chatbot chatbot = getChatbot(chatbotId);
-        if (chatbot.getModelType() == Model.ModelType.LLAMA) {
-            log.info("Using LLAMA flow for chatbotId: {}", chatbotId);
-            return vectorStoreService.searchAndGenerateResponse(chatbotId, message);
-        } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
-            log.info("Using Azure OpenAI flow for chatbotId: {}", chatbotId);
-            // Get top 5 relevant chunks from Azure Search
-            var contextChunks = azureSearchService.searchRelevantChunks(chatbotId, message, 5);
-            StringBuilder context = new StringBuilder();
-            for (String chunk : contextChunks) {
-                context.append(chunk).append("\n\n");
-            }
-            return aiRouterService.callAzureOpenAiWithContext(message, context.toString());
-        } else {
-            log.warn("Unsupported chatbot type for chatbotId: {}", chatbotId);
-            return "Unsupported chatbot type";
-        }
+        log.info("Handling chat for chatbotId: {} with reasoning agent", chatbotId);
+
+        // Delegate to reasoning agent
+        return reasoningAgentService.processQuery(chatbotId, message);
     }
+
 }
