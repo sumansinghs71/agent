@@ -5,6 +5,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.BufferingClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.StringHttpMessageConverter;
@@ -16,6 +18,8 @@ import org.springframework.web.client.RestTemplate;
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 @Configuration
@@ -77,31 +81,33 @@ public class AppConfig {
     // RestTemplate with proper JSON handling
     @Bean
     public RestTemplate restTemplate() {
-        // Configure timeout settings
-        HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory();
-        factory.setConnectTimeout(5000);  // 5 seconds
-        factory.setConnectionRequestTimeout(5000); // 5 seconds
-        //factory.setReadTimeout(30000);    // 30 seconds
+        HttpComponentsClientHttpRequestFactory httpFactory = new HttpComponentsClientHttpRequestFactory();
+        httpFactory.setConnectTimeout(5000);
+      //  httpFactory.setReadTimeout(5000);
 
-        // Create RestTemplate with timeout settings
-        RestTemplate restTemplate = new RestTemplate(factory);
+        // ✅ Wrap with BufferingClientHttpRequestFactory to read entire stream safely
+        RestTemplate restTemplate = new RestTemplate(
+                new BufferingClientHttpRequestFactory(httpFactory)
+        );
 
-        // Create custom message converters
-        List<HttpMessageConverter<?>> converters = new ArrayList<>();
-
-        // 1. JSON converter with proper configuration
-        MappingJackson2HttpMessageConverter jsonConverter = new MappingJackson2HttpMessageConverter();
-        converters.add(jsonConverter);
-
-        // 2. String converter with UTF-8 encoding
-        StringHttpMessageConverter stringConverter = new StringHttpMessageConverter(StandardCharsets.UTF_8);
-        converters.add(stringConverter);
-
-        // Set the converters
-        restTemplate.setMessageConverters(converters);
+        // ✅ Use default converters (don’t replace!)
+        // only extend JSON charset variants
+        restTemplate.getMessageConverters().stream()
+                .filter(c -> c instanceof MappingJackson2HttpMessageConverter)
+                .map(c -> (MappingJackson2HttpMessageConverter) c)
+                .forEach(c -> {
+                    List<MediaType> types = new ArrayList<>(c.getSupportedMediaTypes());
+                    types.add(MediaType.valueOf("application/json;charset=UTF-8"));
+                    types.add(MediaType.valueOf("application/json;charset=utf-8"));
+                    c.setSupportedMediaTypes(types);
+                });
 
         return restTemplate;
     }
+
+
+
+
 
     // Apache Tika for document parsing
     @Bean
