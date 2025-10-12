@@ -22,6 +22,7 @@ import java.util.*;
 @Service
 public class AzureSearchService {
     private static final Logger log = LoggerFactory.getLogger(AzureSearchService.class);
+    private static final String SYSTEM_PROMPT = "You are an intelligent bot for resume handling. Answer user questions based on the provided context. If the answer is not in the context, say you don't know.";
 
     @Value("${azure.openai.search-endpoint}")
     private String searchEndpoint;

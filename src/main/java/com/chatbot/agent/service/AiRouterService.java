@@ -110,9 +110,10 @@ public class AiRouterService {
         headers.set("api-key", azureApiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        // Build messages array for chat API, with context as system prompt
+        // Use SYSTEM_PROMPT as the system message, and append context
+        String systemPrompt = "You are an intelligent bot for resume handling. Answer user questions based on the provided context. If the answer is not in the context, say you don't know. Context: " + context;
         var messages = java.util.List.of(
-            java.util.Map.of("role", "system", "content", "Context: " + context),
+            java.util.Map.of("role", "system", "content", systemPrompt),
             java.util.Map.of("role", "user", "content", question)
         );
 
