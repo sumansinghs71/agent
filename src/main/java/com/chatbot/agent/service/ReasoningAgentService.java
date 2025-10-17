@@ -2,7 +2,9 @@ package com.chatbot.agent.service;
 
 import com.chatbot.agent.model.Model;
 import com.chatbot.agent.model.ToolModel;
+import com.chatbot.agent.model.GuardrailModel;
 import com.chatbot.agent.repository.ChatbotRepository;
+import com.chatbot.agent.service.guardrails.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,42 +26,124 @@ public class ReasoningAgentService {
     private final AzureSearchService azureSearchService;
     private final ObjectMapper objectMapper;
 
+    // Guardrail services
+    private final InputGuardrailsService inputGuardrailsService;
+    private final OutputGuardrailsService outputGuardrailsService;
+    private final GuardrailConfigService guardrailConfigService;
+    private final GuardrailLogService guardrailLogService;
+
     public ReasoningAgentService(ChatbotRepository chatbotRepository,
                                  ToolExecutionService toolExecutionService,
                                  AiRouterService aiRouterService,
                                  VectorStoreService vectorStoreService,
                                  AzureSearchService azureSearchService,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 InputGuardrailsService inputGuardrailsService,
+                                 OutputGuardrailsService outputGuardrailsService,
+                                 GuardrailConfigService guardrailConfigService,
+                                 GuardrailLogService guardrailLogService) {
         this.chatbotRepository = chatbotRepository;
         this.toolExecutionService = toolExecutionService;
         this.aiRouterService = aiRouterService;
         this.vectorStoreService = vectorStoreService;
         this.azureSearchService = azureSearchService;
         this.objectMapper = objectMapper;
+        this.inputGuardrailsService = inputGuardrailsService;
+        this.outputGuardrailsService = outputGuardrailsService;
+        this.guardrailConfigService = guardrailConfigService;
+        this.guardrailLogService = guardrailLogService;
     }
 
     /**
-     * Main reasoning entry point - decides whether to use tools, documents, or both
+     * Main reasoning entry point with guardrails
      */
     public String processQuery(Long chatbotId, String userQuery) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] ReasoningAgent processing query for chatbot: {}", requestId, chatbotId);
 
         try {
+            // STEP 0: Get guardrail configuration
+            GuardrailModel.GuardrailConfig config = guardrailConfigService.getConfig(chatbotId);
+
+            // STEP 1: INPUT GUARDRAILS - Validate user input FIRST
+            log.info("[requestId={}] Running INPUT guardrails validation", requestId);
+            GuardrailModel.GuardrailResult inputValidation =
+                    inputGuardrailsService.validateInput(userQuery, config);
+
+            if (!inputValidation.isAllowed()) {
+                log.warn("[requestId={}] Input BLOCKED by guardrails: type={}, severity={}",
+                        requestId,
+                        inputValidation.getViolation().getType(),
+                        inputValidation.getViolation().getSeverity());
+
+                // Log the violation
+                guardrailLogService.logViolation(
+                        chatbotId,
+                        null, // sessionId - add if you have session tracking
+                        GuardrailModel.GuardrailType.INPUT_VALIDATION,
+                        inputValidation,
+                        userQuery
+                );
+
+                // Return safe response to user
+                return formatGuardrailViolationResponse(inputValidation);
+            }
+
+            // Use sanitized input (PII may have been redacted)
+            String sanitizedQuery = inputValidation.getSanitizedInput();
+            log.info("[requestId={}] Input guardrails PASSED (risk score: {})",
+                    requestId, inputValidation.getRiskScore());
+
+            // STEP 2: Get chatbot and tools
             Model.Chatbot chatbot = chatbotRepository.findById(chatbotId)
                     .orElseThrow(() -> new RuntimeException("Chatbot not found: " + chatbotId));
 
-            // Step 1: Get available tools
             List<ToolModel.Tool> availableTools = toolExecutionService.getToolsForChatbot(chatbotId);
 
-            // Step 2: Analyze query intent and decide action
-            QueryIntent intent = analyzeQueryIntent(chatbot, userQuery, availableTools);
+            // STEP 3: Analyze query intent and decide action (using sanitized query)
+            QueryIntent intent = analyzeQueryIntent(chatbot, sanitizedQuery, availableTools);
 
             log.info("[requestId={}] Query intent determined: actionType={}, confidence={}",
                     requestId, intent.getActionType(), intent.getConfidence());
 
-            // Step 3: Execute based on intent
-            return executeBasedOnIntent(chatbot, userQuery, intent, availableTools);
+            // STEP 4: Execute based on intent
+            String response = executeBasedOnIntent(chatbot, sanitizedQuery, intent, availableTools);
+
+            // STEP 5: OUTPUT GUARDRAILS - Validate AI response
+            log.info("[requestId={}] Running OUTPUT guardrails validation", requestId);
+
+            List<String> sourceContext = extractSourceContext(intent, chatbotId, sanitizedQuery);
+
+            GuardrailModel.GuardrailResult outputValidation =
+                    outputGuardrailsService.validateOutput(
+                            response,
+                            sanitizedQuery,
+                            sourceContext,
+                            config
+                    );
+
+            if (!outputValidation.isAllowed()) {
+                log.warn("[requestId={}] Output BLOCKED by guardrails: type={}",
+                        requestId, outputValidation.getViolation().getType());
+
+                // Log the violation
+                guardrailLogService.logViolation(
+                        chatbotId,
+                        null,
+                        GuardrailModel.GuardrailType.OUTPUT_VALIDATION,
+                        outputValidation,
+                        response
+                );
+
+                // Return fallback response
+                return "I apologize, but I cannot provide a reliable answer to your question at this time. Please try rephrasing or contact support.";
+            }
+
+            log.info("[requestId={}] Output guardrails PASSED (risk score: {})",
+                    requestId, outputValidation.getRiskScore());
+
+            // Return sanitized output (may have PII redacted)
+            return outputValidation.getSanitizedInput();
 
         } catch (Exception e) {
             log.error("[requestId={}] Error in reasoning agent", requestId, e);
@@ -68,29 +152,62 @@ public class ReasoningAgentService {
     }
 
     /**
-     * Analyzes the user query to determine intent
+     * Format user-friendly response for guardrail violations
      */
-    private QueryIntent analyzeQueryIntent(Model.Chatbot chatbot, String userQuery,
-                                           List<ToolModel.Tool> availableTools) {
-        String requestId = MDC.get("requestId");
+    private String formatGuardrailViolationResponse(GuardrailModel.GuardrailResult result) {
+        GuardrailModel.GuardrailViolation violation = result.getViolation();
 
-        // Build prompt for intent classification
-        String intentPrompt = buildIntentClassificationPrompt(userQuery, availableTools);
+        switch (violation.getType()) {
+            case JAILBREAK_ATTEMPT:
+            case PROMPT_INJECTION:
+                return "I cannot process this request. Please rephrase your query in a straightforward manner.";
 
-        log.info("[requestId={}] Sending intent classification prompt to AI", requestId);
+            case TOXIC_CONTENT:
+                return "Please keep your messages respectful and appropriate.";
 
-        // Call AI to classify intent
-        String aiResponse = aiRouterService.routeToAi(chatbot.getModelType(), intentPrompt);
+            case EXCESSIVE_LENGTH:
+                return "Your message is too long. Please shorten it and try again.";
 
-        log.info("[requestId={}] AI intent classification response: {}", requestId, aiResponse);
-
-        // Parse AI response
-        return parseIntentResponse(aiResponse, availableTools);
+            default:
+                return "I cannot process this request. " + violation.getRecommendation();
+        }
     }
 
     /**
-     * Builds the prompt for intent classification
+     * Extract source context for output validation
      */
+    private List<String> extractSourceContext(QueryIntent intent, Long chatbotId, String query) {
+        List<String> context = new ArrayList<>();
+
+        try {
+            if (intent.getActionType() == ActionType.DOCUMENT ||
+                    intent.getActionType() == ActionType.HYBRID) {
+
+                Model.Chatbot chatbot = chatbotRepository.findById(chatbotId).orElse(null);
+                if (chatbot != null) {
+                    if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+                        context = azureSearchService.searchRelevantChunks(chatbotId, query, 5);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error extracting source context", e);
+        }
+
+        return context;
+    }
+
+    private QueryIntent analyzeQueryIntent(Model.Chatbot chatbot, String userQuery,
+                                           List<ToolModel.Tool> availableTools) {
+        String requestId = MDC.get("requestId");
+        String intentPrompt = buildIntentClassificationPrompt(userQuery, availableTools);
+
+        log.info("[requestId={}] Sending intent classification to AI", requestId);
+        String aiResponse = aiRouterService.routeToAi(chatbot.getModelType(), intentPrompt);
+
+        return parseIntentResponse(aiResponse, availableTools);
+    }
+
     private String buildIntentClassificationPrompt(String userQuery, List<ToolModel.Tool> availableTools) {
         StringBuilder prompt = new StringBuilder();
 
@@ -104,60 +221,39 @@ public class ReasoningAgentService {
             for (ToolModel.Tool tool : availableTools) {
                 prompt.append("- Tool: ").append(tool.getFuncNameKey()).append("\n");
                 prompt.append("  Description: ").append(tool.getPrompt()).append("\n");
-                prompt.append("  Parameters: ");
                 if (tool.getParams() != null) {
                     String params = tool.getParams().stream()
                             .map(p -> p.getParamNameKey() + "(" + p.getParamType() + ")")
                             .collect(Collectors.joining(", "));
-                    prompt.append(params);
+                    prompt.append("  Parameters: ").append(params);
                 }
                 prompt.append("\n\n");
             }
         }
 
         prompt.append("User Query: \"").append(userQuery).append("\"\n\n");
-
-        prompt.append("Analyze the query and respond with JSON in this exact format:\n");
+        prompt.append("Respond with JSON:\n");
         prompt.append("{\n");
         prompt.append("  \"action\": \"TOOL\" | \"DOCUMENT\" | \"HYBRID\" | \"CONVERSATIONAL\",\n");
-        prompt.append("  \"reasoning\": \"explanation of why you chose this action\",\n");
+        prompt.append("  \"reasoning\": \"explanation\",\n");
         prompt.append("  \"confidence\": 0.0 to 1.0,\n");
-        prompt.append("  \"tool_name\": \"name of tool if action is TOOL or HYBRID\",\n");
-        prompt.append("  \"parameters\": {\"param1\": \"extracted_value\", ...}\n");
-        prompt.append("}\n\n");
-
-        prompt.append("Guidelines:\n");
-        prompt.append("- Use TOOL if query asks for specific data that a tool can provide\n");
-        prompt.append("- Use DOCUMENT if query asks for general knowledge or explanations\n");
-        prompt.append("- Use HYBRID if query needs both tool data and document context\n");
-        prompt.append("- Use CONVERSATIONAL if query is a greeting or general conversation\n");
-        prompt.append("- Extract parameter values from the user query\n");
-        prompt.append("- Respond ONLY with valid JSON, no additional text\n");
+        prompt.append("  \"tool_name\": \"tool name if TOOL or HYBRID\",\n");
+        prompt.append("  \"parameters\": {\"param1\": \"value1\"}\n");
+        prompt.append("}\n");
 
         return prompt.toString();
     }
 
-    /**
-     * Parses the AI's intent classification response
-     */
     private QueryIntent parseIntentResponse(String aiResponse, List<ToolModel.Tool> availableTools) {
         QueryIntent intent = new QueryIntent();
 
         try {
-            // Clean response - remove markdown code blocks if present
-            String cleaned = aiResponse.trim();
-            if (cleaned.startsWith("```json")) {
-                cleaned = cleaned.substring(7);
-            }
-            if (cleaned.startsWith("```")) {
-                cleaned = cleaned.substring(3);
-            }
-            if (cleaned.endsWith("```")) {
-                cleaned = cleaned.substring(0, cleaned.length() - 3);
-            }
-            cleaned = cleaned.trim();
+            String cleaned = aiResponse.trim()
+                    .replaceFirst("^```json\\s*", "")
+                    .replaceFirst("^```\\s*", "")
+                    .replaceFirst("```\\s*$", "")
+                    .trim();
 
-            // Parse JSON
             Map<String, Object> response = objectMapper.readValue(cleaned, Map.class);
 
             String action = (String) response.get("action");
@@ -168,64 +264,47 @@ public class ReasoningAgentService {
             intent.setParameters((Map<String, Object>) response.get("parameters"));
 
         } catch (Exception e) {
-            log.error("Failed to parse intent response, defaulting to DOCUMENT", e);
-            // Default to document search if parsing fails
+            log.error("Failed to parse intent, defaulting to DOCUMENT", e);
             intent.setActionType(ActionType.DOCUMENT);
-            intent.setReasoning("Failed to parse intent, using default");
+            intent.setReasoning("Failed to parse intent");
             intent.setConfidence(0.5);
         }
 
         return intent;
     }
 
-    /**
-     * Executes the appropriate action based on intent
-     */
     private String executeBasedOnIntent(Model.Chatbot chatbot, String userQuery,
                                         QueryIntent intent, List<ToolModel.Tool> availableTools) {
-        String requestId = MDC.get("requestId");
-
         switch (intent.getActionType()) {
             case TOOL:
                 return executeToolAction(chatbot, userQuery, intent);
-
             case DOCUMENT:
                 return executeDocumentAction(chatbot, userQuery);
-
             case HYBRID:
                 return executeHybridAction(chatbot, userQuery, intent);
-
             case CONVERSATIONAL:
                 return executeConversationalAction(chatbot, userQuery);
-
             default:
-                log.warn("[requestId={}] Unknown action type: {}", requestId, intent.getActionType());
                 return executeDocumentAction(chatbot, userQuery);
         }
     }
 
-    /**
-     * Executes tool-based action
-     */
     private String executeToolAction(Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing TOOL action: {}", requestId, intent.getToolName());
 
         try {
-            // Execute the tool
             ToolModel.ToolExecutionRequest toolRequest = new ToolModel.ToolExecutionRequest();
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolModel.ToolExecutionResult result = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest
-            );
+                    chatbot.getId(), toolRequest);
 
             if (!result.isSuccess()) {
                 return "I tried to fetch the data but encountered an error: " + result.getError();
             }
 
-            // Format the tool result with AI
             return formatToolResultWithAI(chatbot, userQuery, result.getData());
 
         } catch (Exception e) {
@@ -234,9 +313,6 @@ public class ReasoningAgentService {
         }
     }
 
-    /**
-     * Executes document-based action (RAG)
-     */
     private String executeDocumentAction(Model.Chatbot chatbot, String userQuery) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing DOCUMENT action", requestId);
@@ -255,100 +331,71 @@ public class ReasoningAgentService {
             return "Unsupported model type";
         } catch (Exception e) {
             log.error("[requestId={}] Document search failed", requestId, e);
-            return "I couldn't find relevant information in the documents: " + e.getMessage();
+            return "I couldn't find relevant information: " + e.getMessage();
         }
     }
 
-    /**
-     * Executes hybrid action (both tool and documents)
-     */
     private String executeHybridAction(Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing HYBRID action", requestId);
 
         try {
-            // Step 1: Execute tool to get data
             ToolModel.ToolExecutionRequest toolRequest = new ToolModel.ToolExecutionRequest();
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolModel.ToolExecutionResult toolResult = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest
-            );
+                    chatbot.getId(), toolRequest);
 
-            // Step 2: Get relevant document context
             String documentContext = "";
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {
-                var contextChunks = vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery);
-                documentContext = contextChunks;
+                documentContext = vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery);
             } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
                 var contextChunks = azureSearchService.searchRelevantChunks(chatbot.getId(), userQuery, 3);
                 documentContext = String.join("\n\n", contextChunks);
             }
 
-            // Step 3: Combine both and generate final response
             return formatHybridResultWithAI(chatbot, userQuery, toolResult.getData(), documentContext);
 
         } catch (Exception e) {
             log.error("[requestId={}] Hybrid execution failed", requestId, e);
-            return "I encountered an error while processing your request: " + e.getMessage();
+            return "I encountered an error: " + e.getMessage();
         }
     }
 
-    /**
-     * Executes conversational action (no tool or document needed)
-     */
     private String executeConversationalAction(Model.Chatbot chatbot, String userQuery) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing CONVERSATIONAL action", requestId);
-
         return aiRouterService.routeToAi(chatbot.getModelType(), userQuery);
     }
 
-    /**
-     * Formats tool result using AI for natural language response
-     */
     private String formatToolResultWithAI(Model.Chatbot chatbot, String userQuery, Object toolData) {
         try {
             String dataJson = objectMapper.writeValueAsString(toolData);
-
             String prompt = "User asked: \"" + userQuery + "\"\n\n" +
-                    "The tool returned this data:\n" +
-                    dataJson + "\n\n" +
-                    "Please provide a natural, conversational response to the user's question " +
-                    "using this data. Be concise and clear.";
-
+                    "Tool data:\n" + dataJson + "\n\n" +
+                    "Provide a natural, conversational response.";
             return aiRouterService.routeToAi(chatbot.getModelType(), prompt);
         } catch (Exception e) {
-            log.error("Failed to format tool result", e);
             return "Here's what I found: " + toolData.toString();
         }
     }
 
-    /**
-     * Formats hybrid result (tool + documents) using AI
-     */
     private String formatHybridResultWithAI(Model.Chatbot chatbot, String userQuery,
                                             Object toolData, String documentContext) {
         try {
             String dataJson = objectMapper.writeValueAsString(toolData);
-
             String prompt = "User asked: \"" + userQuery + "\"\n\n" +
                     "Tool data:\n" + dataJson + "\n\n" +
-                    "Additional context from documents:\n" + documentContext + "\n\n" +
-                    "Please provide a comprehensive response combining both the tool data " +
-                    "and document context to fully answer the user's question.";
-
+                    "Document context:\n" + documentContext + "\n\n" +
+                    "Provide a comprehensive response.";
             return aiRouterService.routeToAi(chatbot.getModelType(), prompt);
         } catch (Exception e) {
-            log.error("Failed to format hybrid result", e);
             return "Here's what I found: " + toolData.toString();
         }
     }
 
-    /**
-     * Query Intent representation
-     */
+    // Inner classes
     public static class QueryIntent {
         private ActionType actionType;
         private String reasoning;
@@ -358,24 +405,17 @@ public class ReasoningAgentService {
 
         public ActionType getActionType() { return actionType; }
         public void setActionType(ActionType actionType) { this.actionType = actionType; }
-
         public String getReasoning() { return reasoning; }
         public void setReasoning(String reasoning) { this.reasoning = reasoning; }
-
         public double getConfidence() { return confidence; }
         public void setConfidence(double confidence) { this.confidence = confidence; }
-
         public String getToolName() { return toolName; }
         public void setToolName(String toolName) { this.toolName = toolName; }
-
         public Map<String, Object> getParameters() { return parameters; }
         public void setParameters(Map<String, Object> parameters) { this.parameters = parameters; }
     }
 
     public enum ActionType {
-        TOOL,           // Use tool only
-        DOCUMENT,       // Search documents only
-        HYBRID,         // Use both tool and documents
-        CONVERSATIONAL  // No tool/document needed, just conversation
+        TOOL, DOCUMENT, HYBRID, CONVERSATIONAL
     }
 }
