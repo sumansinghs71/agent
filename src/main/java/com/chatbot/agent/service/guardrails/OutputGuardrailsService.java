@@ -1,6 +1,7 @@
-package com.chatbot.agent.service;
+package com.chatbot.agent.service.guardrails;
 
 import com.chatbot.agent.model.GuardrailModel;
+import com.chatbot.agent.service.AiRouterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;

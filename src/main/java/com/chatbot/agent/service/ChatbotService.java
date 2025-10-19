@@ -1,5 +1,6 @@
 package com.chatbot.agent.service;
 
+import com.chatbot.agent.controller.ChatbotController;
 import com.chatbot.agent.model.Model;
 import com.chatbot.agent.repository.ChatbotRepository;
 import com.chatbot.agent.repository.DataSourceRepository;
@@ -166,6 +167,27 @@ public class ChatbotService {
 
         // Delegate to reasoning agent
         return reasoningAgentService.processQuery(chatbotId, message);
+    }
+
+    @Transactional
+    public Model.Chatbot updateInstructions(Long chatbotId,
+                                            ChatbotController.InstructionUpdateRequest request) {
+        Model.Chatbot chatbot = getChatbot(chatbotId);
+
+        if (request.getSystemInstruction() != null) {
+            chatbot.setSystemInstruction(request.getSystemInstruction());
+        }
+
+        if (request.getUserInstruction() != null) {
+            chatbot.setUserInstruction(request.getUserInstruction());
+        }
+
+        if (request.getEnabled() != null) {
+            chatbot.setInstructionEnabled(request.getEnabled());
+        }
+
+        chatbotRepository.update(chatbot);
+        return chatbot;
     }
 
 }

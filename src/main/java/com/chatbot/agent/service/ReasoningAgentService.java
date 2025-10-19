@@ -200,7 +200,7 @@ public class ReasoningAgentService {
     private QueryIntent analyzeQueryIntent(Model.Chatbot chatbot, String userQuery,
                                            List<ToolModel.Tool> availableTools) {
         String requestId = MDC.get("requestId");
-        String intentPrompt = buildIntentClassificationPrompt(userQuery, availableTools);
+        String intentPrompt = buildIntentClassificationPrompt(userQuery, availableTools, chatbot);
 
         log.info("[requestId={}] Sending intent classification to AI", requestId);
         String aiResponse = aiRouterService.routeToAi(chatbot.getModelType(), intentPrompt);
@@ -208,19 +208,43 @@ public class ReasoningAgentService {
         return parseIntentResponse(aiResponse, availableTools);
     }
 
-    private String buildIntentClassificationPrompt(String userQuery, List<ToolModel.Tool> availableTools) {
+    private String buildIntentClassificationPrompt(String userQuery, List<ToolModel.Tool> availableTools, Model.Chatbot chatbot){
         StringBuilder prompt = new StringBuilder();
 
+        // ADD CUSTOM SYSTEM INSTRUCTION FIRST
+        if (chatbot.getInstructionEnabled() != null && chatbot.getInstructionEnabled() &&
+                chatbot.getSystemInstruction() != null && !chatbot.getSystemInstruction().isEmpty()) {
+            prompt.append("=== SYSTEM INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getSystemInstruction()).append("\n\n");
+            prompt.append("=== END SYSTEM INSTRUCTIONS ===\n\n");
+        }
+
         prompt.append("You are an intelligent agent that decides how to answer user queries.\n\n");
+
+        // ADD CUSTOM USER INSTRUCTION
+        if (chatbot.getInstructionEnabled() != null && chatbot.getInstructionEnabled() &&
+                chatbot.getUserInstruction() != null && !chatbot.getUserInstruction().isEmpty()) {
+            prompt.append("=== USER INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getUserInstruction()).append("\n\n");
+            prompt.append("=== END USER INSTRUCTIONS ===\n\n");
+        }
         prompt.append("You have access to:\n");
-        prompt.append("1. DOCUMENTS - Knowledge base with general information\n");
-        prompt.append("2. TOOLS - Specific functions to query databases or APIs\n\n");
+        prompt.append("1. DOCUMENTS - Knowledge base containing:\n");
+        prompt.append("   - User resumes and profiles\n");
+        prompt.append("   - Personal information (skills, experience, education)\n");
+        prompt.append("   - Company policies and procedures\n");
+        prompt.append("   - General knowledge and FAQs\n");
+        prompt.append("2. TOOLS - External APIs and databases for:\n");
+        prompt.append("   - Fetching real-time data\n");
+        prompt.append("   - Querying external systems\n");
+        prompt.append("   - Executing operations\n\n");
 
         if (!availableTools.isEmpty()) {
             prompt.append("Available tools:\n");
             for (ToolModel.Tool tool : availableTools) {
                 prompt.append("- Tool: ").append(tool.getFuncNameKey()).append("\n");
                 prompt.append("  Description: ").append(tool.getPrompt()).append("\n");
+                prompt.append("  Type: ").append(tool.getFunctionType()).append("\n"); // Add type
                 if (tool.getParams() != null) {
                     String params = tool.getParams().stream()
                             .map(p -> p.getParamNameKey() + "(" + p.getParamType() + ")")
@@ -232,12 +256,21 @@ public class ReasoningAgentService {
         }
 
         prompt.append("User Query: \"").append(userQuery).append("\"\n\n");
+
+        prompt.append("DECISION RULES:\n");
+        prompt.append("- Use DOCUMENT for: resume questions, profiles, 'who is X', 'tell me about X', personal info, skills, experience\n");
+        prompt.append("- Use TOOL for: external data lookups, API calls, database queries with specific IDs\n");
+        prompt.append("- Use HYBRID for: combining personal profile with external data\n");
+        prompt.append("- Use CONVERSATIONAL for: greetings, thanks, general chat\n\n");
+
+        prompt.append("IMPORTANT: Names like 'Suman Singh' likely refer to people in uploaded documents/resumes, NOT external API users!\n\n");
+
         prompt.append("Respond with JSON:\n");
         prompt.append("{\n");
         prompt.append("  \"action\": \"TOOL\" | \"DOCUMENT\" | \"HYBRID\" | \"CONVERSATIONAL\",\n");
-        prompt.append("  \"reasoning\": \"explanation\",\n");
+        prompt.append("  \"reasoning\": \"detailed explanation\",\n");
         prompt.append("  \"confidence\": 0.0 to 1.0,\n");
-        prompt.append("  \"tool_name\": \"tool name if TOOL or HYBRID\",\n");
+        prompt.append("  \"tool_name\": \"tool name if TOOL or HYBRID, null otherwise\",\n");
         prompt.append("  \"parameters\": {\"param1\": \"value1\"}\n");
         prompt.append("}\n");
 
@@ -319,13 +352,27 @@ public class ReasoningAgentService {
 
         try {
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {
-                return vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery);
+                return vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery, chatbot.getSystemInstruction(), chatbot.getUserInstruction());
             } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
                 var contextChunks = azureSearchService.searchRelevantChunks(chatbot.getId(), userQuery, 5);
                 StringBuilder context = new StringBuilder();
+
+                // ADD INSTRUCTIONS TO CONTEXT
+                if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                    context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                    context.append(chatbot.getSystemInstruction()).append("\n\n");
+                }
+
+                if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                    context.append("=== USER INSTRUCTIONS ===\n");
+                    context.append(chatbot.getUserInstruction()).append("\n\n");
+                }
+
+                context.append("=== DOCUMENT CONTEXT ===\n");
                 for (String chunk : contextChunks) {
                     context.append(chunk).append("\n\n");
                 }
+
                 return aiRouterService.callAzureOpenAiWithContext(userQuery, context.toString());
             }
             return "Unsupported model type";
@@ -349,7 +396,7 @@ public class ReasoningAgentService {
 
             String documentContext = "";
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {
-                documentContext = vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery);
+                documentContext = vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery, chatbot.getSystemInstruction(), chatbot.getUserInstruction());
             } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
                 var contextChunks = azureSearchService.searchRelevantChunks(chatbot.getId(), userQuery, 3);
                 documentContext = String.join("\n\n", contextChunks);
@@ -366,16 +413,47 @@ public class ReasoningAgentService {
     private String executeConversationalAction(Model.Chatbot chatbot, String userQuery) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing CONVERSATIONAL action", requestId);
-        return aiRouterService.routeToAi(chatbot.getModelType(), userQuery);
+
+        StringBuilder prompt = new StringBuilder();
+
+        // ADD INSTRUCTIONS
+        if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+            prompt.append("=== SYSTEM INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getSystemInstruction()).append("\n\n");
+        }
+
+        if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+            prompt.append("=== USER INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getUserInstruction()).append("\n\n");
+        }
+
+        prompt.append(userQuery);
+
+        return aiRouterService.routeToAi(chatbot.getModelType(), prompt.toString());
     }
 
     private String formatToolResultWithAI(Model.Chatbot chatbot, String userQuery, Object toolData) {
         try {
             String dataJson = objectMapper.writeValueAsString(toolData);
-            String prompt = "User asked: \"" + userQuery + "\"\n\n" +
-                    "Tool data:\n" + dataJson + "\n\n" +
-                    "Provide a natural, conversational response.";
-            return aiRouterService.routeToAi(chatbot.getModelType(), prompt);
+
+            StringBuilder prompt = new StringBuilder();
+
+            // ADD INSTRUCTIONS
+            if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                prompt.append("=== SYSTEM INSTRUCTIONS ===\n");
+                prompt.append(chatbot.getSystemInstruction()).append("\n\n");
+            }
+
+            if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                prompt.append("=== USER INSTRUCTIONS ===\n");
+                prompt.append(chatbot.getUserInstruction()).append("\n\n");
+            }
+
+            prompt.append("User asked: \"").append(userQuery).append("\"\n\n");
+            prompt.append("Tool data:\n").append(dataJson).append("\n\n");
+            prompt.append("Provide a natural, conversational response following the instructions above.");
+
+            return aiRouterService.routeToAi(chatbot.getModelType(), prompt.toString());
         } catch (Exception e) {
             return "Here's what I found: " + toolData.toString();
         }
@@ -385,11 +463,25 @@ public class ReasoningAgentService {
                                             Object toolData, String documentContext) {
         try {
             String dataJson = objectMapper.writeValueAsString(toolData);
-            String prompt = "User asked: \"" + userQuery + "\"\n\n" +
-                    "Tool data:\n" + dataJson + "\n\n" +
-                    "Document context:\n" + documentContext + "\n\n" +
-                    "Provide a comprehensive response.";
-            return aiRouterService.routeToAi(chatbot.getModelType(), prompt);
+
+            StringBuilder prompt = new StringBuilder();
+
+            if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                prompt.append("=== SYSTEM INSTRUCTIONS ===\n");
+                prompt.append(chatbot.getSystemInstruction()).append("\n\n");
+            }
+
+            if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                prompt.append("=== USER INSTRUCTIONS ===\n");
+                prompt.append(chatbot.getUserInstruction()).append("\n\n");
+            }
+
+            prompt.append("User asked: \"").append(userQuery).append("\"\n\n");
+            prompt.append("Tool data:\n").append(dataJson).append("\n\n");
+            prompt.append("Document context:\n").append(documentContext).append("\n\n");
+            prompt.append("Provide a comprehensive response following the instructions above.");
+
+            return aiRouterService.routeToAi(chatbot.getModelType(), prompt.toString());
         } catch (Exception e) {
             return "Here's what I found: " + toolData.toString();
         }
