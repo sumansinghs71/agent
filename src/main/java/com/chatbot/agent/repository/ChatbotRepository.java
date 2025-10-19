@@ -18,20 +18,6 @@ public class ChatbotRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    private final RowMapper<Model.Chatbot> chatbotRowMapper = (rs, rowNum) -> {
-        Model.Chatbot chatbot = new Model.Chatbot();
-        chatbot.setId(rs.getLong("id"));
-        chatbot.setName(rs.getString("name"));
-        chatbot.setModelType(Model.ModelType.valueOf(rs.getString("model_type")));
-        chatbot.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
-        return chatbot;
-    };
-
-    public void save(Model.Chatbot chatbot) {
-        String sql = "INSERT INTO chatbot (name, model_type) VALUES (?, ?)";
-        jdbcTemplate.update(sql, chatbot.getName(), chatbot.getModelType().name());
-    }
-
     public Optional<Model.Chatbot> findById(Long id) {
         String sql = "SELECT * FROM chatbot WHERE id = ?";
         return jdbcTemplate.query(sql, chatbotRowMapper, id).stream().findFirst();
@@ -47,11 +33,40 @@ public class ChatbotRepository {
         jdbcTemplate.update(sql, id);
     }
 
-    public void update(Model.Chatbot chatbot) {
-        String sql = "UPDATE chatbot SET name = ?, model_type = ? WHERE id = ?";
+    private final RowMapper<Model.Chatbot> chatbotRowMapper = (rs, rowNum) -> {
+        Model.Chatbot chatbot = new Model.Chatbot();
+        chatbot.setId(rs.getLong("id"));
+        chatbot.setName(rs.getString("name"));
+        chatbot.setModelType(Model.ModelType.valueOf(rs.getString("model_type")));
+        chatbot.setSystemInstruction(rs.getString("system_instruction"));
+        chatbot.setUserInstruction(rs.getString("user_instruction"));
+        chatbot.setInstructionEnabled(rs.getBoolean("instruction_enabled"));
+        chatbot.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
+        return chatbot;
+    };
+
+    public void save(Model.Chatbot chatbot) {
+        String sql = "INSERT INTO chatbot (name, model_type, system_instruction, user_instruction, instruction_enabled) " +
+                "VALUES (?, ?, ?, ?, ?)";
         jdbcTemplate.update(sql,
                 chatbot.getName(),
                 chatbot.getModelType().name(),
-                chatbot.getId());
+                chatbot.getSystemInstruction(),
+                chatbot.getUserInstruction(),
+                chatbot.getInstructionEnabled() != null ? chatbot.getInstructionEnabled() : true
+        );
+    }
+
+    public void update(Model.Chatbot chatbot) {
+        String sql = "UPDATE chatbot SET name = ?, model_type = ?, system_instruction = ?, " +
+                "user_instruction = ?, instruction_enabled = ? WHERE id = ?";
+        jdbcTemplate.update(sql,
+                chatbot.getName(),
+                chatbot.getModelType().name(),
+                chatbot.getSystemInstruction(),
+                chatbot.getUserInstruction(),
+                chatbot.getInstructionEnabled(),
+                chatbot.getId()
+        );
     }
 }

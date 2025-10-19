@@ -109,36 +109,56 @@ public class VectorStoreService {
         return pgObject;
     }
 
-    public String searchAndGenerateResponse(Long chatbotId, String question) {
+
+    public String searchAndGenerateResponse(Long chatbotId, String question,  String systemInstruction, String userInstruction) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] VectorStoreService.searchAndGenerateResponse request: chatbotId={}, question={}", requestId, chatbotId, question);
         try {
-            // 1. Generate embedding for the question
+            // 1. Generate embedding for question
             float[] questionEmbedding = ollamaService.generateEmbedding(question);
-            // 2. Convert to PostgreSQL vector string representation
+
+            // 2. Search for relevant chunks
             String vectorString = toVectorString(questionEmbedding);
-            // 3. Create SQL query with proper vector syntax
             String contextSql = "SELECT chunk_text " +
                     "FROM document_vectors " +
                     "WHERE chatbot_id = ? " +
-                    "ORDER BY embedding <=> ? " +  // Vector comparison operator
+                    "ORDER BY embedding <=> ? " +
                     "LIMIT 5";
-            // 4. Execute query with proper parameter types
+
             List<String> contextChunks = vectorJdbcTemplate.queryForList(
                     contextSql,
                     new Object[]{chatbotId, vectorString},
-                    new int[]{Types.BIGINT, Types.OTHER},  // Explicit type specification
+                    new int[]{Types.BIGINT, Types.OTHER},
                     String.class
             );
-            // 5. Build context
+
+            // 3. Build context with instructions
             StringBuilder context = new StringBuilder();
+
+            // ADD SYSTEM INSTRUCTION
+            if (systemInstruction != null && !systemInstruction.isEmpty()) {
+                context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                context.append(systemInstruction).append("\n\n");
+            }
+
+            // ADD USER INSTRUCTION
+            if (userInstruction != null && !userInstruction.isEmpty()) {
+                context.append("=== USER INSTRUCTIONS ===\n");
+                context.append(userInstruction).append("\n\n");
+            }
+
+            // ADD DOCUMENT CHUNKS
+            context.append("=== DOCUMENT CONTEXT ===\n");
             for (String chunk : contextChunks) {
                 context.append(chunk).append("\n\n");
             }
-            // 6. Generate response
+
+            // 4. Generate response with instructions
             String response = ollamaService.generateResponse(question, context.toString());
-            log.info("[requestId={}] VectorStoreService.searchAndGenerateResponse response: chatbotId={}, response.length={}", requestId, chatbotId, response != null ? response.length() : 0);
+
+            log.info("[requestId={}] Response generated", requestId);
             return response;
+
         } catch (Exception e) {
             log.error("[requestId={}] Failed to search and generate response: chatbotId={}, error={}", requestId, chatbotId, e.getMessage(), e);
             throw new VectorStoreException("Failed to search and generate response from vector store", e);

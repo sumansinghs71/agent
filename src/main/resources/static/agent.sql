@@ -51,6 +51,9 @@ select * from document
 
 SELECT * FROM chatbot;
 
+select * from tool where chatbot_id=2;
+
+SELECT * FROM tool WHERE chatbot_id = 2 AND func_name_key = 'getUserById';
 
 
 -- Tool definition table
