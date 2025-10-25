@@ -1,6 +1,7 @@
 package com.chatbot.agent.service;
 
 import com.chatbot.agent.exception.VectorStoreException;
+import com.chatbot.agent.model.CitationModel;
 import org.postgresql.util.PGobject;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -109,36 +110,56 @@ public class VectorStoreService {
         return pgObject;
     }
 
-    public String searchAndGenerateResponse(Long chatbotId, String question) {
+
+    public String searchAndGenerateResponse(Long chatbotId, String question,  String systemInstruction, String userInstruction) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] VectorStoreService.searchAndGenerateResponse request: chatbotId={}, question={}", requestId, chatbotId, question);
         try {
-            // 1. Generate embedding for the question
+            // 1. Generate embedding for question
             float[] questionEmbedding = ollamaService.generateEmbedding(question);
-            // 2. Convert to PostgreSQL vector string representation
+
+            // 2. Search for relevant chunks
             String vectorString = toVectorString(questionEmbedding);
-            // 3. Create SQL query with proper vector syntax
             String contextSql = "SELECT chunk_text " +
                     "FROM document_vectors " +
                     "WHERE chatbot_id = ? " +
-                    "ORDER BY embedding <=> ? " +  // Vector comparison operator
+                    "ORDER BY embedding <=> ? " +
                     "LIMIT 5";
-            // 4. Execute query with proper parameter types
+
             List<String> contextChunks = vectorJdbcTemplate.queryForList(
                     contextSql,
                     new Object[]{chatbotId, vectorString},
-                    new int[]{Types.BIGINT, Types.OTHER},  // Explicit type specification
+                    new int[]{Types.BIGINT, Types.OTHER},
                     String.class
             );
-            // 5. Build context
+
+            // 3. Build context with instructions
             StringBuilder context = new StringBuilder();
+
+            // ADD SYSTEM INSTRUCTION
+            if (systemInstruction != null && !systemInstruction.isEmpty()) {
+                context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                context.append(systemInstruction).append("\n\n");
+            }
+
+            // ADD USER INSTRUCTION
+            if (userInstruction != null && !userInstruction.isEmpty()) {
+                context.append("=== USER INSTRUCTIONS ===\n");
+                context.append(userInstruction).append("\n\n");
+            }
+
+            // ADD DOCUMENT CHUNKS
+            context.append("=== DOCUMENT CONTEXT ===\n");
             for (String chunk : contextChunks) {
                 context.append(chunk).append("\n\n");
             }
-            // 6. Generate response
+
+            // 4. Generate response with instructions
             String response = ollamaService.generateResponse(question, context.toString());
-            log.info("[requestId={}] VectorStoreService.searchAndGenerateResponse response: chatbotId={}, response.length={}", requestId, chatbotId, response != null ? response.length() : 0);
+
+            log.info("[requestId={}] Response generated", requestId);
             return response;
+
         } catch (Exception e) {
             log.error("[requestId={}] Failed to search and generate response: chatbotId={}, error={}", requestId, chatbotId, e.getMessage(), e);
             throw new VectorStoreException("Failed to search and generate response from vector store", e);
@@ -160,5 +181,108 @@ public class VectorStoreService {
         return IntStream.range(0, array.length)
                 .mapToObj(i -> Float.toString(array[i]))
                 .collect(Collectors.joining(","));
+    }
+
+    /**
+     * Index document with metadata
+     */
+    public void indexDocumentWithMetadata(Long chatbotId, Long documentId,
+                                          List<DocumentService.ChunkWithMetadata> chunksWithMetadata) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Indexing {} chunks with metadata", requestId, chunksWithMetadata.size());
+
+        String sql = "INSERT INTO document_vectors (chatbot_id, document_id, chunk_index, chunk_text, embedding, " +
+                "document_name, page_number, section_title, chunk_start_pos, chunk_end_pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        try {
+            // Generate embeddings
+            List<float[]> embeddings = chunksWithMetadata.stream()
+                    .map(chunk -> ollamaService.generateEmbedding(chunk.chunkText))
+                    .collect(Collectors.toList());
+
+            List<PGobject> pgVectors = embeddings.stream()
+                    .map(this::toPGVector)
+                    .collect(Collectors.toList());
+
+            // Batch insert with metadata
+            vectorJdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws SQLException {
+                    DocumentService.ChunkWithMetadata chunk = chunksWithMetadata.get(i);
+                    ps.setLong(1, chatbotId);
+                    ps.setLong(2, documentId);
+                    ps.setInt(3, chunk.chunkIndex);
+                    ps.setString(4, chunk.chunkText);
+                    ps.setObject(5, pgVectors.get(i));
+                    ps.setString(6, chunk.documentName);
+                    ps.setInt(7, chunk.pageNumber != null ? chunk.pageNumber : 0);
+                    ps.setString(8, chunk.sectionTitle);
+                    ps.setInt(9, chunk.chunkStartPos != null ? chunk.chunkStartPos : 0);
+                    ps.setInt(10, chunk.chunkEndPos != null ? chunk.chunkEndPos : 0);
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return chunksWithMetadata.size();
+                }
+            });
+
+            log.info("[requestId={}] Successfully indexed {} chunks with metadata",
+                    requestId, chunksWithMetadata.size());
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Failed to index with metadata", requestId, e);
+            throw new VectorStoreException("Failed to index document with metadata", e);
+        }
+    }
+
+    /**
+     * Search and return chunks WITH metadata
+     */
+    public List<CitationModel.ChunkWithMetadata> searchChunksWithMetadata(Long chatbotId, String question, int topK) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Searching chunks with metadata: topK={}", requestId, topK);
+
+        try {
+            // Generate embedding
+            float[] questionEmbedding = ollamaService.generateEmbedding(question);
+            String vectorString = toVectorString(questionEmbedding);
+
+            // Query with metadata
+            String sql = "SELECT chunk_text, document_name, page_number, section_title, " +
+                    "document_id, chunk_index, chunk_start_pos, chunk_end_pos, " +
+                    "1 - (embedding <=> ?::vector) as similarity_score " +
+                    "FROM document_vectors " +
+                    "WHERE chatbot_id = ? " +
+                    "ORDER BY embedding <=> ?::vector " +
+                    "LIMIT ?";
+
+            List<CitationModel.ChunkWithMetadata> results = vectorJdbcTemplate.query(
+                    sql,
+                    new Object[]{vectorString, chatbotId, vectorString, topK},
+                    new int[]{Types.OTHER, Types.BIGINT, Types.OTHER, Types.INTEGER},
+                    (rs, rowNum) -> {
+                        CitationModel.ChunkWithMetadata chunk = new CitationModel.ChunkWithMetadata();
+                        chunk.setChunkText(rs.getString("chunk_text"));
+                        chunk.setDocumentName(rs.getString("document_name"));
+                        chunk.setPageNumber(rs.getInt("page_number"));
+                        chunk.setSectionTitle(rs.getString("section_title"));
+                        chunk.setDocumentId(rs.getLong("document_id"));
+                        chunk.setChunkIndex(rs.getInt("chunk_index"));
+                        chunk.setChunkStartPos(rs.getInt("chunk_start_pos"));
+                        chunk.setChunkEndPos(rs.getInt("chunk_end_pos"));
+                        chunk.setSimilarityScore(rs.getFloat("similarity_score"));
+                        return chunk;
+                    }
+            );
+
+            log.info("[requestId={}] Found {} chunks with metadata", requestId, results.size());
+            return results;
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Search with metadata failed", requestId, e);
+            throw new VectorStoreException("Failed to search with metadata", e);
+        }
     }
 }

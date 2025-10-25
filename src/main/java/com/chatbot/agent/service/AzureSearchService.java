@@ -8,6 +8,7 @@ import com.azure.search.documents.models.IndexDocumentsResult;
 import com.azure.search.documents.models.SearchOptions;
 import com.azure.search.documents.models.SearchResult;
 import com.chatbot.agent.exception.AzureSearchException;
+import com.chatbot.agent.model.CitationModel;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -96,6 +97,181 @@ public class AzureSearchService {
             log.error("[requestId={}] Exception searching Azure Search", requestId, e);
             throw new AzureSearchException("Failed to search Azure Search", e);
         }
+        return chunks;
+    }
+
+    /**
+     * Upload chunks with metadata to Azure Search
+     */
+    public void uploadChunksWithMetadata(Long chatbotId, Long documentId,
+                                         List<DocumentService.ChunkWithMetadata> chunksWithMetadata) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Uploading {} chunks with metadata to Azure Search",
+                requestId, chunksWithMetadata.size());
+
+        List<Map<String, Object>> docs = new ArrayList<>();
+        for (int i = 0; i < chunksWithMetadata.size(); i++) {
+            DocumentService.ChunkWithMetadata chunk = chunksWithMetadata.get(i);
+
+            Map<String, Object> doc = new HashMap<>();
+            doc.put("id", chatbotId + "-" + documentId + "-" + i);
+            doc.put("chatbot_id", chatbotId);
+            doc.put("document_id", documentId);
+            doc.put("chunk_index", i);
+            doc.put("chunk_text", chunk.chunkText);
+            doc.put("document_name", chunk.documentName);
+            doc.put("page_number", chunk.pageNumber != null ? chunk.pageNumber : 0);
+            doc.put("section_title", chunk.sectionTitle != null ? chunk.sectionTitle : "");
+            doc.put("chunk_start_pos", chunk.chunkStartPos != null ? chunk.chunkStartPos : 0);
+            doc.put("chunk_end_pos", chunk.chunkEndPos != null ? chunk.chunkEndPos : 0);
+
+            docs.add(doc);
+        }
+
+        IndexDocumentsBatch<Map<String, Object>> batch = new IndexDocumentsBatch<>();
+        batch.addUploadActions(docs);
+
+        try {
+            IndexDocumentsResult result = searchClient.indexDocuments(batch);
+            log.info("[requestId={}] Indexed {} chunks with metadata to Azure Search",
+                    requestId, docs.size());
+        } catch (Exception e) {
+            log.error("[requestId={}] Failed to upload chunks with metadata", requestId, e);
+            throw new AzureSearchException("Failed to upload chunks with metadata", e);
+        }
+    }
+
+    /**
+     * Search and return chunks with metadata
+     */
+    public List<CitationModel.ChunkWithMetadata> searchChunksWithMetadata(
+            Long chatbotId,
+            String question,
+            int topK) {
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Searching Azure Search with metadata: topK={}", requestId, topK);
+
+        String filter = String.format("chatbot_id eq %d", chatbotId);
+        SearchOptions options = new SearchOptions()
+                .setFilter(filter)
+                .setTop(topK)
+                // Only select fields that are guaranteed to exist in the index. Some deployments
+                // may not have chunk_start_pos / chunk_end_pos in the index schema which will
+                // cause Azure Search to return 400. Remove those fields from the select to be
+                // defensive. If you control the index, add those fields to the index schema.
+                .setSelect("chunk_text", "document_name", "page_number", "section_title",
+                        "document_id", "chunk_index");
+
+        List<CitationModel.ChunkWithMetadata> chunks = new ArrayList<>();
+
+        try {
+            Iterable<SearchResult> results = searchClient.search(question, options, null);
+            int rank = 0;
+
+            // CHANGED: Step 1 – Collect all results and raw scores first, because Azure
+            //           returns unnormalized BM25 or vector scores (e.g., 11, 8.7, 2.3)
+            //           and we want to normalize them later into a 0–1 range.
+            List<SearchResult> resultList = new ArrayList<>();
+            List<Double> rawScores = new ArrayList<>();
+
+            for (SearchResult result : results) {
+                resultList.add(result);
+
+                double rawScoreValue;
+                try {
+                    rawScoreValue = result.getScore(); // handles both double and Double
+                } catch (Exception ex) {
+                    rawScoreValue = 0.0; // fallback default
+                }
+
+                rawScores.add(rawScoreValue);
+            }
+
+            // CHANGED: Step 2 – Compute the maximum raw score per query
+            //           so we can normalize all scores relative to it.
+            double maxScore = rawScores.stream()
+                    .mapToDouble(Double::doubleValue)
+                    .max()
+                    .orElse(1.0);
+
+            // Optional: Debug logging for transparency
+            log.debug("[requestId={}] Azure raw scores={}, maxScore={}",
+                    requestId, rawScores, maxScore);
+
+            // CHANGED: Step 3 – Normalize scores and build chunks
+            for (int i = 0; i < resultList.size(); i++) {
+                SearchResult result = resultList.get(i);
+                Map<String, Object> doc = result.getDocument(Map.class);
+
+                CitationModel.ChunkWithMetadata chunk = new CitationModel.ChunkWithMetadata();
+                chunk.setChunkText((String) doc.get("chunk_text"));
+                chunk.setDocumentName((String) doc.get("document_name"));
+
+                // Defensive numeric parsing: Azure may return Integer/Long/Double
+                Object pn = doc.get("page_number");
+                if (pn instanceof Number) {
+                    chunk.setPageNumber(((Number) pn).intValue());
+                } else if (pn != null) {
+                    try {
+                        chunk.setPageNumber(Integer.parseInt(pn.toString()));
+                    } catch (NumberFormatException ignored) {}
+                }
+
+                Object section = doc.get("section_title");
+                if (section != null) chunk.setSectionTitle(section.toString());
+
+                Object did = doc.get("document_id");
+                if (did instanceof Number) {
+                    chunk.setDocumentId(((Number) did).longValue());
+                } else if (did != null) {
+                    try {
+                        chunk.setDocumentId(Long.parseLong(did.toString()));
+                    } catch (NumberFormatException ignored) {}
+                }
+
+                Object ci = doc.get("chunk_index");
+                if (ci instanceof Number) {
+                    chunk.setChunkIndex(((Number) ci).intValue());
+                } else if (ci != null) {
+                    try {
+                        chunk.setChunkIndex(Integer.parseInt(ci.toString()));
+                    } catch (NumberFormatException ignored) {}
+                }
+
+                // chunk_start_pos / chunk_end_pos may not exist in index schema
+                if (doc.get("chunk_start_pos") != null) {
+                    try {
+                        chunk.setChunkStartPos(((Number) doc.get("chunk_start_pos")).intValue());
+                    } catch (ClassCastException ex) {
+                        // ignore - field not present in expected type
+                    }
+                }
+                if (doc.get("chunk_end_pos") != null) {
+                    try {
+                        chunk.setChunkEndPos(((Number) doc.get("chunk_end_pos")).intValue());
+                    } catch (ClassCastException ex) {
+                        // ignore
+                    }
+                }
+
+                // CHANGED: Step 4 – Normalize raw score into [0, 1]
+                Double rawScore = rawScores.get(i);
+                float normalizedScore = (float) (rawScore / maxScore);
+                if (normalizedScore > 1.0f) normalizedScore = 1.0f; // safety cap
+                chunk.setSimilarityScore(normalizedScore);
+
+                chunks.add(chunk);
+            }
+
+            log.info("[requestId={}] Retrieved {} chunks with metadata from Azure Search",
+                    requestId, chunks.size());
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Azure Search with metadata failed", requestId, e);
+            throw new AzureSearchException("Failed to search Azure Search with metadata", e);
+        }
+
         return chunks;
     }
 }

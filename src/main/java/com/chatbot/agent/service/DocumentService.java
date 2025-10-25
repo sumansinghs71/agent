@@ -4,26 +4,22 @@ import com.chatbot.agent.model.Model;
 import com.chatbot.agent.repository.DocumentRepository;
 import com.chatbot.agent.repository.ChatbotRepository;
 import org.apache.tika.Tika;
-import org.apache.tika.exception.TikaException;
-import org.apache.tika.metadata.Metadata;
-import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
+import org.apache.tika.exception.TikaException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 
 import java.io.*;
 import java.nio.file.*;
-import java.sql.SQLException;
 import java.util.*;
 import java.util.regex.*;
 
@@ -47,7 +43,6 @@ public class DocumentService {
     private final ChatbotRepository chatbotRepository;
     private final AzureSearchService azureSearchService;
 
-    @Autowired
     public DocumentService(VectorStoreService vectorStoreService,
                            DocumentRepository documentRepository,
                            Tika tika,
@@ -62,7 +57,9 @@ public class DocumentService {
 
     public Model.Document uploadDocument(Long chatbotId, MultipartFile file) throws IOException {
         String requestId = MDC.get("requestId");
-        log.info("[requestId={}] DocumentService.uploadDocument request: chatbotId={}, fileName={}", requestId, chatbotId, file != null ? file.getOriginalFilename() : null);
+        log.info("[requestId={}] DocumentService.uploadDocument: chatbotId={}, fileName={}",
+                requestId, chatbotId, file.getOriginalFilename());
+
         Path uploadPath = Paths.get(uploadDir);
         if (!Files.exists(uploadPath)) {
             Files.createDirectories(uploadPath);
@@ -79,7 +76,7 @@ public class DocumentService {
         document.setStatus(Model.DocumentStatus.UPLOADED);
         Model.Document savedDocument = documentRepository.save(document);
 
-        log.info("[requestId={}] DocumentService.uploadDocument success: chatbotId={}, documentId={}", requestId, chatbotId, document.getId());
+        log.info("[requestId={}] Document uploaded: documentId={}", requestId, document.getId());
         processDocumentAsync(savedDocument);
         return document;
     }
@@ -87,138 +84,237 @@ public class DocumentService {
     @Async
     public void processDocumentAsync(Model.Document document) {
         String requestId = MDC.get("requestId");
-        log.info("[requestId={}] DocumentService.processDocumentAsync request: documentId={}, fileName={}", requestId, document.getId(), document.getFileName());
+        log.info("[requestId={}] Processing document: documentId={}", requestId, document.getId());
+
         try {
             document.setStatus(Model.DocumentStatus.PROCESSING);
             documentRepository.updateStatus(document.getId(), document.getStatus());
 
-            // Extract text
-            String extractedText = extractText(document.getFilePath());
-            log.info("[requestId={}] Extracted {} characters from {}", requestId, extractedText.length(), document.getFileName());
+            // Extract text with metadata
+            DocumentWithMetadata docWithMetadata = extractTextWithMetadata(document.getFilePath());
+            log.info("[requestId={}] Extracted {} pages", requestId, docWithMetadata.pages.size());
 
-            // Chunk text and stream index
-            streamChunksToVectorStore(extractedText, document);
+            // Chunk with metadata
+            List<ChunkWithMetadata> chunksWithMetadata = chunkDocumentWithMetadata(
+                    document.getFileName(),
+                    docWithMetadata
+            );
+
+            log.info("[requestId={}] Created {} chunks with metadata",
+                    requestId, chunksWithMetadata.size());
+
+            // Index with metadata
+            indexChunksWithMetadata(document, chunksWithMetadata);
+
             document.setStatus(Model.DocumentStatus.INDEXED);
             documentRepository.updateStatus(document.getId(), document.getStatus());
-            log.info("[requestId={}] Document {} successfully indexed", requestId, document.getFileName());
+            log.info("[requestId={}] Document indexed successfully", requestId);
+
         } catch (Exception e) {
-            log.error("[requestId={}] Document processing failed for {}", requestId, document.getFileName(), e);
+            log.error("[requestId={}] Document processing failed", requestId, e);
             document.setStatus(Model.DocumentStatus.FAILED);
             documentRepository.updateStatus(document.getId(), document.getStatus());
         }
     }
 
-    private String extractText(String filePath) throws IOException {
-        log.info("Extracting text from: {}", filePath);
+    /**
+     * Extract text with page and section metadata
+     */
+    private DocumentWithMetadata extractTextWithMetadata(String filePath) throws IOException, TikaException {
+        log.info("Extracting text with metadata from: {}", filePath);
         File file = new File(filePath);
-        if (!file.exists()) throw new IOException("File not found: " + filePath);
 
-        boolean isDocx = filePath.toLowerCase().endsWith(".docx");
-        try {
-            if (!filePath.toLowerCase().endsWith(".pdf")) {
-                String tikaText = extractTextWithTika(file);
-                if (isDocx && (tikaText == null || tikaText.trim().isEmpty())) {
-                    log.warn("Tika failed to extract text from .docx, trying POI fallback");
-                    String poiText = extractTextWithPOIDocx(file);
-                    if (poiText != null && !poiText.trim().isEmpty()) {
-                        return poiText;
-                    }
-                }
-                return tikaText;
-            }
-            return extractTextWithPDFBoxPaged(file);
-        } catch (Exception e1) {
-            log.error("Primary extraction failed, trying fallback", e1);
-            try {
-                return filePath.toLowerCase().endsWith(".pdf")
-                        ? extractTextWithTika(file)
-                        : extractTextWithPDFBoxPaged(file);
-            } catch (Exception e2) {
-                throw new IOException("All extraction methods failed: " + e1.getMessage() + " | " + e2.getMessage());
-            }
+        if (filePath.toLowerCase().endsWith(".pdf")) {
+            return extractPdfWithMetadata(file);
+        } else if (filePath.toLowerCase().endsWith(".docx")) {
+            return extractDocxWithMetadata(file);
+        } else {
+            // Fallback: extract without detailed metadata
+            String text = tika.parseToString(file);
+            DocumentWithMetadata doc = new DocumentWithMetadata();
+            PageContent page = new PageContent();
+            page.pageNumber = 1;
+            page.text = text;
+            doc.pages.add(page);
+            return doc;
         }
     }
 
-    private String extractTextWithTika(File file) throws IOException, TikaException {
-        try (InputStream stream = new FileInputStream(file)) {
-            Metadata metadata = new Metadata();
-            metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, file.getName());
-            return tika.parseToString(stream, metadata);
-        }
-    }
+    /**
+     * Extract PDF with page-level metadata
+     */
+    private DocumentWithMetadata extractPdfWithMetadata(File file) throws IOException {
+        DocumentWithMetadata docMetadata = new DocumentWithMetadata();
 
-    private String extractTextWithPDFBoxPaged(File file) throws IOException {
-        StringBuilder sb = new StringBuilder();
         try (PDDocument doc = Loader.loadPDF(file)) {
-            if (doc.isEncrypted()) doc.setAllSecurityToBeRemoved(true);
+            if (doc.isEncrypted()) {
+                doc.setAllSecurityToBeRemoved(true);
+            }
+
             PDFTextStripper stripper = new PDFTextStripper();
             int totalPages = doc.getNumberOfPages();
-            for (int i = 1; i <= totalPages; i++) {
-                stripper.setStartPage(i);
-                stripper.setEndPage(i);
-                sb.append(stripper.getText(doc)).append("\n");
+
+            for (int pageNum = 1; pageNum <= totalPages; pageNum++) {
+                stripper.setStartPage(pageNum);
+                stripper.setEndPage(pageNum);
+                String pageText = stripper.getText(doc);
+
+                PageContent page = new PageContent();
+                page.pageNumber = pageNum;
+                page.text = pageText;
+                page.sectionTitle = detectSectionTitle(pageText);
+
+                docMetadata.pages.add(page);
             }
         }
-        return sb.toString();
+
+        return docMetadata;
     }
 
-    private String extractTextWithPOIDocx(File file) {
+    /**
+     * Extract DOCX with section metadata
+     */
+    private DocumentWithMetadata extractDocxWithMetadata(File file) throws IOException {
+        DocumentWithMetadata docMetadata = new DocumentWithMetadata();
+
         try (FileInputStream fis = new FileInputStream(file);
              XWPFDocument doc = new XWPFDocument(fis);
              XWPFWordExtractor extractor = new XWPFWordExtractor(doc)) {
-            return extractor.getText();
-        } catch (Exception e) {
-            log.error("POI failed to extract text from .docx: {}", file.getName(), e);
-            return "";
+
+            String fullText = extractor.getText();
+
+            // DOCX doesn't have explicit pages, treat as single page
+            // or split by section breaks
+            PageContent page = new PageContent();
+            page.pageNumber = 1;
+            page.text = fullText;
+            page.sectionTitle = detectSectionTitle(fullText);
+
+            docMetadata.pages.add(page);
         }
+
+        return docMetadata;
     }
 
-    private void streamChunksToVectorStore(String text, Model.Document document) throws SQLException {
-        String requestId = MDC.get("requestId");
-        if (text == null || text.isEmpty()) {
-            log.warn("[requestId={}] Text is empty for document {}", requestId, document.getId());
-            return;
+    /**
+     * Detect section title from text (heuristic-based)
+     */
+    private String detectSectionTitle(String text) {
+        // Look for common section patterns
+        String[] lines = text.split("\n");
+        for (String line : lines) {
+            line = line.trim();
+            // Common section headers: all caps, short, at start
+            if (line.length() > 3 && line.length() < 50) {
+                if (line.matches("^[A-Z][A-Z\\s]+$") || // ALL CAPS
+                        line.matches("^\\d+\\.\\s+[A-Z].*") || // Numbered: "1. Experience"
+                        line.matches("^[A-Z][a-z]+:.*")) { // Title: "Skills:"
+                    return line;
+                }
+            }
         }
-        log.info("[requestId={}] DocumentService.streamChunksToVectorStore request: documentId={}, text.length={}", requestId, document.getId(), text != null ? text.length() : 0);
-        //Pattern sentencePattern = Pattern.compile("(?s)(.{1," + chunkSize + "}(?<=\\.|\\n|\\r))");
+        return null;
+    }
+
+    /**
+     * Chunk document with metadata preserved
+     */
+    private List<ChunkWithMetadata> chunkDocumentWithMetadata(String documentName,
+                                                              DocumentWithMetadata docMetadata) {
+        List<ChunkWithMetadata> chunks = new ArrayList<>();
+        int globalChunkIndex = 0;
+        int globalCharPosition = 0;
+
+        for (PageContent page : docMetadata.pages) {
+            String pageText = page.text;
+            int pageStartPos = globalCharPosition;
+
+            // Chunk this page
+            List<String> pageChunks = chunkText(pageText);
+
+            for (String chunkText : pageChunks) {
+                ChunkWithMetadata chunk = new ChunkWithMetadata();
+                chunk.chunkText = chunkText;
+                chunk.documentName = documentName;
+                chunk.pageNumber = page.pageNumber;
+                chunk.sectionTitle = page.sectionTitle;
+                chunk.chunkIndex = globalChunkIndex++;
+                chunk.chunkStartPos = globalCharPosition;
+                chunk.chunkEndPos = globalCharPosition + chunkText.length();
+
+                chunks.add(chunk);
+                globalCharPosition += chunkText.length();
+            }
+
+            globalCharPosition = pageStartPos + pageText.length();
+        }
+
+        return chunks;
+    }
+
+    /**
+     * Chunk text into smaller pieces
+     */
+    private List<String> chunkText(String text) {
+        if (text == null || text.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> chunks = new ArrayList<>();
         Pattern sentencePattern = Pattern.compile("(.{1," + chunkSize + "}(?<=\\s|\\n|\\r|(?<=[.!?])))");
         Matcher matcher = sentencePattern.matcher(text);
 
-        List<String> chunks = new ArrayList<>();
-        int lastEnd = 0;
-
         while (matcher.find()) {
-            int start = matcher.start();
-            int end = matcher.end();
-            String chunk = text.substring(start, end).trim();
+            String chunk = matcher.group().trim();
             if (!chunk.isEmpty()) {
                 chunks.add(chunk);
-                lastEnd = end;
             }
         }
 
-        // Handle any remaining text
-        if (lastEnd < text.length()) {
-            String lastChunk = text.substring(lastEnd).trim();
-            if (!lastChunk.isEmpty()) {
-                chunks.add(lastChunk);
-            }
-        }
-
-        // Determine where to upload based on chatbot type
-        Model.Chatbot chatbot = chatbotRepository.findById(document.getChatbotId())
-                .orElseThrow(() -> new RuntimeException("Chatbot not found with id: " + document.getChatbotId()));
-        if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
-            log.info("[requestId={}] DocumentService.streamChunksToVectorStore uploading to AzureSearchService: chatbotId={}, documentId={}, chunks.size={}", requestId, document.getChatbotId(), document.getId(), chunks.size());
-            azureSearchService.uploadChunksToAzureSearch(document.getChatbotId(), document.getId(), chunks);
-        } else {
-            log.info("[requestId={}] DocumentService.streamChunksToVectorStore uploading to VectorStoreService: chatbotId={}, documentId={}, chunks.size={}", requestId, document.getChatbotId(), document.getId(), chunks.size());
-            vectorStoreService.indexDocument(document.getChatbotId(), document.getId(), chunks);
-        }
-
-        // Help GC
-        text = null;
+        return chunks;
     }
 
+    /**
+     * Index chunks with metadata
+     */
+    private void indexChunksWithMetadata(Model.Document document,
+                                         List<ChunkWithMetadata> chunksWithMetadata) {
+        Model.Chatbot chatbot = chatbotRepository.findById(document.getChatbotId())
+                .orElseThrow(() -> new RuntimeException("Chatbot not found"));
 
+        if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+            azureSearchService.uploadChunksWithMetadata(
+                    document.getChatbotId(),
+                    document.getId(),
+                    chunksWithMetadata
+            );
+        } else {
+            vectorStoreService.indexDocumentWithMetadata(
+                    document.getChatbotId(),
+                    document.getId(),
+                    chunksWithMetadata
+            );
+        }
+    }
+
+    // Helper classes
+    private static class DocumentWithMetadata {
+        List<PageContent> pages = new ArrayList<>();
+    }
+
+    private static class PageContent {
+        int pageNumber;
+        String text;
+        String sectionTitle;
+    }
+
+    public static class ChunkWithMetadata {
+        public String chunkText;
+        public String documentName;
+        public Integer pageNumber;
+        public String sectionTitle;
+        public Integer chunkIndex;
+        public Integer chunkStartPos;
+        public Integer chunkEndPos;
+    }
 }
