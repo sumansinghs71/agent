@@ -28,7 +28,7 @@
       search-index: chatbot-indexx
 
   llama:
-    base-url: http://localhost:11434
+    base-url: http://127.0.0.1:11434
     embedding-model: nomic-embed-text  # Add this line
     generation-model: llama2
     vector-db:
