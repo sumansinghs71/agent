@@ -12,8 +12,28 @@ public class Model {
         private Long id;
         private String name;
         private ModelType modelType;
+        private String systemInstruction;  // NEW
+        private String userInstruction;    // NEW
+        private Boolean instructionEnabled; // NEW
         private LocalDateTime createdAt;
         private List<DataSource> dataSources = new ArrayList<>();
+    }
+
+    @Data
+    public static class ChatbotInstruction {
+        private Long id;
+        private Long chatbotId;
+        private InstructionType instructionType;
+        private String instructionText;
+        private Integer priority;
+        private Boolean enabled;
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
+    }
+
+    public enum InstructionType {
+        SYSTEM,  // System-level behavior instructions
+        USER     // User-facing behavior instructions
     }
 
     @Data

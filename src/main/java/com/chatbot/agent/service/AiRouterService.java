@@ -96,12 +96,39 @@ public class AiRouterService {
 
     private String callLlama(String prompt) {
         String requestId = MDC.get("requestId");
-        String url = llamaUrl + "/generate";
-        String requestBody = String.format("{\"text\": \"%s\"}", prompt);
+        String url = llamaUrl + "/api/generate";
+        String sanitizedPrompt = prompt
+                .replace("\\", "\\\\")  // escape backslashes
+                .replace("\"", "\\\"")  // escape quotes
+                .replace("\n", "\\n");  // escape newlines
+
+        String requestBody = String.format(
+                "{\"model\": \"llama2\", \"prompt\": \"%s\", \"stream\": false}", sanitizedPrompt
+        );
+//        String requestBody = String.format("{\"text\": \"%s\"}", prompt);
         log.info("[requestId={}] AiRouterService.callLlama request: url={}, body={}", requestId, url, requestBody);
-        String response = restTemplate.postForObject(url, requestBody, String.class);
+//        String response = restTemplate.postForObject(url, requestBody, String.class);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+        String response = restTemplate.postForObject(url, entity, String.class);
+
         log.info("[requestId={}] AiRouterService.callLlama response: {}", requestId, response);
-        return response;
+        return extractInnerJson(response);
+    }
+
+    public String extractInnerJson(String fullResponse) {
+        int startIndex = fullResponse.indexOf("\"response\":\"") + "\"response\":\"".length();
+        int endIndex = fullResponse.indexOf("\",\"done\":");
+
+        if (startIndex >= 0 && endIndex > startIndex) {
+            String rawJson = fullResponse.substring(startIndex, endIndex);
+            // Unescape JSON string
+            String cleanedJson = rawJson.replace("\\n", "\n").replace("\\\"", "\"");
+            return cleanedJson;
+        }
+        return null;
     }
 
     public String callAzureOpenAiWithContext(String question, String context) {
