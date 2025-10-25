@@ -98,3 +98,39 @@ CREATE TABLE tool_execution_log (
 CREATE INDEX idx_tool_chatbot ON tool(chatbot_id);
 CREATE INDEX idx_tool_execution_chatbot ON tool_execution_log(chatbot_id, executed_at);
 CREATE INDEX idx_tool_execution_session ON tool_execution_log(session_id, executed_at);
+
+
+
+-- Add instruction columns to chatbot table
+ALTER TABLE chatbot 
+ADD COLUMN system_instruction TEXT,
+ADD COLUMN user_instruction TEXT,
+ADD COLUMN instruction_enabled BOOLEAN DEFAULT TRUE;
+
+-- Or create separate table for better management
+CREATE TABLE chatbot_instruction (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    chatbot_id BIGINT NOT NULL,
+    instruction_type ENUM('SYSTEM', 'USER') NOT NULL,
+    instruction_text TEXT NOT NULL,
+    priority INT DEFAULT 0,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (chatbot_id) REFERENCES chatbot(id) ON DELETE CASCADE,
+    INDEX idx_chatbot_enabled (chatbot_id, enabled)
+);
+
+
+CREATE TABLE IF NOT EXISTS citation_log (
+    id BIGINT PRIMARY KEY,
+    chatbot_id BIGINT NOT NULL,
+    session_id VARCHAR(255),
+    query TEXT,
+    response TEXT,
+    citations_json TEXT, -- JSON array of citations used
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (chatbot_id) REFERENCES chatbot(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_citation_chatbot ON citation_log(chatbot_id, created_at);

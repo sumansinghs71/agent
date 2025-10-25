@@ -1,9 +1,11 @@
 package com.chatbot.agent.service;
 
+import com.chatbot.agent.model.CitationModel;
 import com.chatbot.agent.model.Model;
 import com.chatbot.agent.model.ToolModel;
 import com.chatbot.agent.model.GuardrailModel;
 import com.chatbot.agent.repository.ChatbotRepository;
+import com.chatbot.agent.service.citation.CitationService;
 import com.chatbot.agent.service.guardrails.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -25,12 +27,12 @@ public class ReasoningAgentService {
     private final VectorStoreService vectorStoreService;
     private final AzureSearchService azureSearchService;
     private final ObjectMapper objectMapper;
-
-    // Guardrail services
     private final InputGuardrailsService inputGuardrailsService;
     private final OutputGuardrailsService outputGuardrailsService;
     private final GuardrailConfigService guardrailConfigService;
     private final GuardrailLogService guardrailLogService;
+    private final CitationService citationService;
+    private final OllamaService ollamaService;
 
     public ReasoningAgentService(ChatbotRepository chatbotRepository,
                                  ToolExecutionService toolExecutionService,
@@ -41,7 +43,9 @@ public class ReasoningAgentService {
                                  InputGuardrailsService inputGuardrailsService,
                                  OutputGuardrailsService outputGuardrailsService,
                                  GuardrailConfigService guardrailConfigService,
-                                 GuardrailLogService guardrailLogService) {
+                                 GuardrailLogService guardrailLogService,
+                                 CitationService citationService,
+                                 OllamaService ollamaService) {
         this.chatbotRepository = chatbotRepository;
         this.toolExecutionService = toolExecutionService;
         this.aiRouterService = aiRouterService;
@@ -52,20 +56,29 @@ public class ReasoningAgentService {
         this.outputGuardrailsService = outputGuardrailsService;
         this.guardrailConfigService = guardrailConfigService;
         this.guardrailLogService = guardrailLogService;
+        this.citationService = citationService;
+        this.ollamaService =  ollamaService;
+    }
+
+
+    public String processQuery(Long chatbotId, String userQuery) {
+        CitationModel.ResponseWithCitations responseWithCitations = processQueryWithCitations(chatbotId, userQuery);
+        return formatResponseWithCitations(responseWithCitations);
     }
 
     /**
      * Main reasoning entry point with guardrails
      */
-    public String processQuery(Long chatbotId, String userQuery) {
+    public CitationModel.ResponseWithCitations processQueryWithCitations(Long chatbotId, String userQuery) {
         String requestId = MDC.get("requestId");
-        log.info("[requestId={}] ReasoningAgent processing query for chatbot: {}", requestId, chatbotId);
+        log.info("[requestId={}] ReasoningAgent processing query with citations for chatbot: {}",
+                requestId, chatbotId);
 
         try {
             // STEP 0: Get guardrail configuration
             GuardrailModel.GuardrailConfig config = guardrailConfigService.getConfig(chatbotId);
 
-            // STEP 1: INPUT GUARDRAILS - Validate user input FIRST
+            // STEP 1: INPUT GUARDRAILS
             log.info("[requestId={}] Running INPUT guardrails validation", requestId);
             GuardrailModel.GuardrailResult inputValidation =
                     inputGuardrailsService.validateInput(userQuery, config);
@@ -76,20 +89,16 @@ public class ReasoningAgentService {
                         inputValidation.getViolation().getType(),
                         inputValidation.getViolation().getSeverity());
 
-                // Log the violation
                 guardrailLogService.logViolation(
-                        chatbotId,
-                        null, // sessionId - add if you have session tracking
+                        chatbotId, null,
                         GuardrailModel.GuardrailType.INPUT_VALIDATION,
-                        inputValidation,
-                        userQuery
+                        inputValidation, userQuery
                 );
 
-                // Return safe response to user
-                return formatGuardrailViolationResponse(inputValidation);
+                // Return error response with no citations
+                return createErrorResponse(formatGuardrailViolationResponse(inputValidation));
             }
 
-            // Use sanitized input (PII may have been redacted)
             String sanitizedQuery = inputValidation.getSanitizedInput();
             log.info("[requestId={}] Input guardrails PASSED (risk score: {})",
                     requestId, inputValidation.getRiskScore());
@@ -100,23 +109,24 @@ public class ReasoningAgentService {
 
             List<ToolModel.Tool> availableTools = toolExecutionService.getToolsForChatbot(chatbotId);
 
-            // STEP 3: Analyze query intent and decide action (using sanitized query)
+            // STEP 3: Analyze query intent
             QueryIntent intent = analyzeQueryIntent(chatbot, sanitizedQuery, availableTools);
 
             log.info("[requestId={}] Query intent determined: actionType={}, confidence={}",
                     requestId, intent.getActionType(), intent.getConfidence());
 
-            // STEP 4: Execute based on intent
-            String response = executeBasedOnIntent(chatbot, sanitizedQuery, intent, availableTools);
+            // STEP 4: Execute based on intent WITH CITATIONS
+            CitationModel.ResponseWithCitations responseWithCitations =
+                    executeBasedOnIntentWithCitations(chatbot, sanitizedQuery, intent, availableTools);
 
-            // STEP 5: OUTPUT GUARDRAILS - Validate AI response
+            // STEP 5: OUTPUT GUARDRAILS
             log.info("[requestId={}] Running OUTPUT guardrails validation", requestId);
 
-            List<String> sourceContext = extractSourceContext(intent, chatbotId, sanitizedQuery);
+            List<String> sourceContext = extractSourceContextFromCitations(responseWithCitations);
 
             GuardrailModel.GuardrailResult outputValidation =
                     outputGuardrailsService.validateOutput(
-                            response,
+                            responseWithCitations.getAnswer(),
                             sanitizedQuery,
                             sourceContext,
                             config
@@ -126,29 +136,342 @@ public class ReasoningAgentService {
                 log.warn("[requestId={}] Output BLOCKED by guardrails: type={}",
                         requestId, outputValidation.getViolation().getType());
 
-                // Log the violation
                 guardrailLogService.logViolation(
-                        chatbotId,
-                        null,
+                        chatbotId, null,
                         GuardrailModel.GuardrailType.OUTPUT_VALIDATION,
-                        outputValidation,
-                        response
+                        outputValidation, responseWithCitations.getAnswer()
                 );
 
-                // Return fallback response
-                return "I apologize, but I cannot provide a reliable answer to your question at this time. Please try rephrasing or contact support.";
+                return createErrorResponse(
+                        "I apologize, but I cannot provide a reliable answer to your question at this time. " +
+                                "Please try rephrasing or contact support."
+                );
             }
 
             log.info("[requestId={}] Output guardrails PASSED (risk score: {})",
                     requestId, outputValidation.getRiskScore());
 
-            // Return sanitized output (may have PII redacted)
-            return outputValidation.getSanitizedInput();
+            // STEP 6: Sanitize output if needed
+            if (!outputValidation.getSanitizedInput().equals(responseWithCitations.getAnswer())) {
+                responseWithCitations.setAnswer(outputValidation.getSanitizedInput());
+            }
+
+            return responseWithCitations;
 
         } catch (Exception e) {
             log.error("[requestId={}] Error in reasoning agent", requestId, e);
-            return "I encountered an error processing your request: " + e.getMessage();
+            return createErrorResponse("I encountered an error processing your request: " + e.getMessage());
         }
+    }
+
+    /**
+     * Execute based on intent and return ResponseWithCitations
+     */
+    private CitationModel.ResponseWithCitations executeBasedOnIntentWithCitations(
+            Model.Chatbot chatbot,
+            String userQuery,
+            QueryIntent intent,
+            List<ToolModel.Tool> availableTools) {
+
+        switch (intent.getActionType()) {
+            case TOOL:
+                return executeToolActionWithCitations(chatbot, userQuery, intent);
+            case DOCUMENT:
+                return executeDocumentActionWithCitations(chatbot, userQuery);
+            case HYBRID:
+                return executeHybridActionWithCitations(chatbot, userQuery, intent);
+            case CONVERSATIONAL:
+                return executeConversationalActionWithCitations(chatbot, userQuery);
+            default:
+                return executeDocumentActionWithCitations(chatbot, userQuery);
+        }
+    }
+
+    /**
+     * TOOL action with citations
+     */
+    private CitationModel.ResponseWithCitations executeToolActionWithCitations(
+            Model.Chatbot chatbot,
+            String userQuery,
+            QueryIntent intent) {
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing TOOL action: {}", requestId, intent.getToolName());
+
+        try {
+            ToolModel.ToolExecutionRequest toolRequest = new ToolModel.ToolExecutionRequest();
+            toolRequest.setFuncNameKey(intent.getToolName());
+            toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
+
+            ToolModel.ToolExecutionResult result = toolExecutionService.executeTool(
+                    chatbot.getId(), toolRequest);
+
+            if (!result.isSuccess()) {
+                return createErrorResponse("I tried to fetch the data but encountered an error: " + result.getError());
+            }
+
+            // Format tool result with AI
+            String response = formatToolResultWithAI(chatbot, userQuery, result.getData());
+
+            // Tool responses don't have document citations, but we can add metadata
+            CitationModel.ResponseWithCitations responseWithCitations = new CitationModel.ResponseWithCitations();
+            responseWithCitations.setAnswer(response);
+            responseWithCitations.setCitations(new ArrayList<>());
+
+            CitationModel.CitationMetadata metadata = new CitationModel.CitationMetadata();
+            metadata.setTotalSources(0);
+            metadata.setAvgConfidence(1.0f); // Tool data is 100% from source
+            metadata.setDocumentsUsed(Collections.singletonList("Tool: " + intent.getToolName()));
+            metadata.setTotalChunksRetrieved(0);
+            metadata.setCitationsAdded(0);
+            responseWithCitations.setMetadata(metadata);
+
+            return responseWithCitations;
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Tool execution failed", requestId, e);
+            return createErrorResponse("I encountered an error while fetching the data: " + e.getMessage());
+        }
+    }
+
+    /**
+     * DOCUMENT action with citations
+     */
+    private CitationModel.ResponseWithCitations executeDocumentActionWithCitations(
+            Model.Chatbot chatbot,
+            String userQuery) {
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing DOCUMENT action with citations", requestId);
+
+        try {
+            List<CitationModel.ChunkWithMetadata> chunks;
+
+            // Get chunks with metadata based on model type
+            if (chatbot.getModelType() == Model.ModelType.LLAMA) {
+                chunks = vectorStoreService.searchChunksWithMetadata(chatbot.getId(), userQuery, 5);
+            } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+                chunks = azureSearchService.searchChunksWithMetadata(chatbot.getId(), userQuery, 5);
+            } else {
+                return createErrorResponse("Unsupported model type");
+            }
+
+            if (chunks.isEmpty()) {
+                return createErrorResponse("I couldn't find any relevant information in the documents.");
+            }
+
+            log.info("[requestId={}] Retrieved {} chunks with metadata", requestId, chunks.size());
+
+            // Build context with instructions
+            StringBuilder context = new StringBuilder();
+
+            if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                context.append(chatbot.getSystemInstruction()).append("\n\n");
+            }
+
+            if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                context.append("=== USER INSTRUCTIONS ===\n");
+                context.append(chatbot.getUserInstruction()).append("\n\n");
+            }
+
+            context.append("=== DOCUMENT CONTEXT ===\n");
+            for (CitationModel.ChunkWithMetadata chunk : chunks) {
+                context.append(chunk.getChunkText()).append("\n\n");
+            }
+
+            // Generate response
+            String response;
+            if (chatbot.getModelType() == Model.ModelType.LLAMA) {
+                response = ollamaService.generateResponse(userQuery, context.toString());
+            } else {
+                response = aiRouterService.callAzureOpenAiWithContext(userQuery, context.toString());
+            }
+
+            // Add citations
+            CitationModel.ResponseWithCitations responseWithCitations =
+                    citationService.addCitations(response, chunks);
+
+            log.info("[requestId={}] Added {} citations to response",
+                    requestId, responseWithCitations.getCitations().size());
+
+            return responseWithCitations;
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Document search failed", requestId, e);
+            return createErrorResponse("I couldn't find relevant information: " + e.getMessage());
+        }
+    }
+
+    /**
+     * HYBRID action with citations
+     */
+    private CitationModel.ResponseWithCitations executeHybridActionWithCitations(
+            Model.Chatbot chatbot,
+            String userQuery,
+            QueryIntent intent) {
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing HYBRID action with citations", requestId);
+
+        try {
+            // Execute tool
+            ToolModel.ToolExecutionRequest toolRequest = new ToolModel.ToolExecutionRequest();
+            toolRequest.setFuncNameKey(intent.getToolName());
+            toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
+
+            ToolModel.ToolExecutionResult toolResult = toolExecutionService.executeTool(
+                    chatbot.getId(), toolRequest);
+
+            // Get document chunks
+            List<CitationModel.ChunkWithMetadata> chunks;
+            if (chatbot.getModelType() == Model.ModelType.LLAMA) {
+                chunks = vectorStoreService.searchChunksWithMetadata(chatbot.getId(), userQuery, 3);
+            } else {
+                chunks = azureSearchService.searchChunksWithMetadata(chatbot.getId(), userQuery, 3);
+            }
+
+            // Build context with tool data and documents
+            StringBuilder context = new StringBuilder();
+
+            if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                context.append(chatbot.getSystemInstruction()).append("\n\n");
+            }
+
+            if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                context.append("=== USER INSTRUCTIONS ===\n");
+                context.append(chatbot.getUserInstruction()).append("\n\n");
+            }
+
+            // Add tool data
+            try {
+                String toolDataJson = objectMapper.writeValueAsString(toolResult.getData());
+                context.append("=== TOOL DATA ===\n");
+                context.append(toolDataJson).append("\n\n");
+            } catch (Exception e) {
+                log.warn("Failed to serialize tool data", e);
+            }
+
+            // Add document context
+            context.append("=== DOCUMENT CONTEXT ===\n");
+            for (CitationModel.ChunkWithMetadata chunk : chunks) {
+                context.append(chunk.getChunkText()).append("\n\n");
+            }
+
+            // Generate response
+            String prompt = "User asked: \"" + userQuery + "\"\n\n" +
+                    "Using the tool data and document context above, provide a comprehensive response.";
+
+            String response = aiRouterService.routeToAi(chatbot.getModelType(), context + "\n" + prompt);
+
+            // Add citations (only from documents, not tool data)
+            CitationModel.ResponseWithCitations responseWithCitations =
+                    citationService.addCitations(response, chunks);
+
+            // Update metadata to include tool info
+            if (responseWithCitations.getMetadata() != null) {
+                List<String> docsUsed = new ArrayList<>(responseWithCitations.getMetadata().getDocumentsUsed());
+                docsUsed.add("Tool: " + intent.getToolName());
+                responseWithCitations.getMetadata().setDocumentsUsed(docsUsed);
+            }
+
+            return responseWithCitations;
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Hybrid execution failed", requestId, e);
+            return createErrorResponse("I encountered an error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * CONVERSATIONAL action with citations (no citations expected)
+     */
+    private CitationModel.ResponseWithCitations executeConversationalActionWithCitations(
+            Model.Chatbot chatbot,
+            String userQuery) {
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing CONVERSATIONAL action", requestId);
+
+        StringBuilder prompt = new StringBuilder();
+
+        if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+            prompt.append("=== SYSTEM INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getSystemInstruction()).append("\n\n");
+        }
+
+        if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+            prompt.append("=== USER INSTRUCTIONS ===\n");
+            prompt.append(chatbot.getUserInstruction()).append("\n\n");
+        }
+
+        prompt.append(userQuery);
+
+        String response = aiRouterService.routeToAi(chatbot.getModelType(), prompt.toString());
+
+        // Conversational responses have no citations
+        CitationModel.ResponseWithCitations responseWithCitations = new CitationModel.ResponseWithCitations();
+        responseWithCitations.setAnswer(response);
+        responseWithCitations.setCitations(new ArrayList<>());
+
+        CitationModel.CitationMetadata metadata = new CitationModel.CitationMetadata();
+        metadata.setTotalSources(0);
+        metadata.setAvgConfidence(0.0f);
+        metadata.setDocumentsUsed(Collections.emptyList());
+        metadata.setTotalChunksRetrieved(0);
+        metadata.setCitationsAdded(0);
+        responseWithCitations.setMetadata(metadata);
+
+        return responseWithCitations;
+    }
+
+    /**
+     * Format ResponseWithCitations as text string (for backward compatibility)
+     */
+    private String formatResponseWithCitationss(CitationModel.ResponseWithCitations responseWithCitations) {
+        if (responseWithCitations.getCitations() == null || responseWithCitations.getCitations().isEmpty()) {
+            return responseWithCitations.getAnswer();
+        }
+
+        StringBuilder formatted = new StringBuilder();
+        formatted.append(responseWithCitations.getAnswer());
+        formatted.append(citationService.formatCitationsAsText(responseWithCitations.getCitations()));
+
+        return formatted.toString();
+    }
+
+    /**
+     * Extract source context from citations for output validation
+     */
+    private List<String> extractSourceContextFromCitations(CitationModel.ResponseWithCitations response) {
+        if (response.getCitations() == null || response.getCitations().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        return response.getCitations().stream()
+                .map(CitationModel.Citation::getExcerpt)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Create error response
+     */
+    private CitationModel.ResponseWithCitations createErrorResponse(String errorMessage) {
+        CitationModel.ResponseWithCitations response = new CitationModel.ResponseWithCitations();
+        response.setAnswer(errorMessage);
+        response.setCitations(new ArrayList<>());
+
+        CitationModel.CitationMetadata metadata = new CitationModel.CitationMetadata();
+        metadata.setTotalSources(0);
+        metadata.setAvgConfidence(0.0f);
+        metadata.setDocumentsUsed(Collections.emptyList());
+        metadata.setTotalChunksRetrieved(0);
+        metadata.setCitationsAdded(0);
+        response.setMetadata(metadata);
+
+        return response;
     }
 
     /**
@@ -348,16 +671,21 @@ public class ReasoningAgentService {
 
     private String executeDocumentAction(Model.Chatbot chatbot, String userQuery) {
         String requestId = MDC.get("requestId");
-        log.info("[requestId={}] Executing DOCUMENT action", requestId);
+        log.info("[requestId={}] Executing DOCUMENT action with citations", requestId);
 
         try {
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {
-                return vectorStoreService.searchAndGenerateResponse(chatbot.getId(), userQuery, chatbot.getSystemInstruction(), chatbot.getUserInstruction());
-            } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
-                var contextChunks = azureSearchService.searchRelevantChunks(chatbot.getId(), userQuery, 5);
+                // Get chunks with metadata
+                List<CitationModel.ChunkWithMetadata> chunks =
+                        vectorStoreService.searchChunksWithMetadata(chatbot.getId(), userQuery, 5);
+
+                if (chunks.isEmpty()) {
+                    return "I couldn't find any relevant information in the documents.";
+                }
+
+                // Build context with instructions
                 StringBuilder context = new StringBuilder();
 
-                // ADD INSTRUCTIONS TO CONTEXT
                 if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
                     context.append("=== SYSTEM INSTRUCTIONS ===\n");
                     context.append(chatbot.getSystemInstruction()).append("\n\n");
@@ -369,17 +697,85 @@ public class ReasoningAgentService {
                 }
 
                 context.append("=== DOCUMENT CONTEXT ===\n");
-                for (String chunk : contextChunks) {
-                    context.append(chunk).append("\n\n");
+                for (CitationModel.ChunkWithMetadata chunk : chunks) {
+                    context.append(chunk.getChunkText()).append("\n\n");
                 }
 
-                return aiRouterService.callAzureOpenAiWithContext(userQuery, context.toString());
+                // Generate response
+                String response = ollamaService.generateResponse(userQuery, context.toString());
+
+                // Add citations
+                CitationModel.ResponseWithCitations responseWithCitations =
+                        citationService.addCitations(response, chunks);
+
+                // Format final response with citations
+                return formatResponseWithCitationss(responseWithCitations);
+
+            } else if (chatbot.getModelType() == Model.ModelType.AZURE_OPENAI) {
+                // Get chunks with metadata
+                List<CitationModel.ChunkWithMetadata> chunks =
+                        azureSearchService.searchChunksWithMetadata(chatbot.getId(), userQuery, 5);
+
+                if (chunks.isEmpty()) {
+                    return "I couldn't find any relevant information in the documents.";
+                }
+
+                log.info("[requestId={}] Retrieved {} chunks with metadata", requestId, chunks.size());
+
+                // Build context
+                StringBuilder context = new StringBuilder();
+
+                if (chatbot.getInstructionEnabled() && chatbot.getSystemInstruction() != null) {
+                    context.append("=== SYSTEM INSTRUCTIONS ===\n");
+                    context.append(chatbot.getSystemInstruction()).append("\n\n");
+                }
+
+                if (chatbot.getInstructionEnabled() && chatbot.getUserInstruction() != null) {
+                    context.append("=== USER INSTRUCTIONS ===\n");
+                    context.append(chatbot.getUserInstruction()).append("\n\n");
+                }
+
+                context.append("=== DOCUMENT CONTEXT ===\n");
+                for (CitationModel.ChunkWithMetadata chunk : chunks) {
+                    context.append(chunk.getChunkText()).append("\n\n");
+                }
+
+                // Generate response
+                String response = aiRouterService.callAzureOpenAiWithContext(userQuery, context.toString());
+
+                // Add citations
+                CitationModel.ResponseWithCitations responseWithCitations =
+                        citationService.addCitations(response, chunks);
+
+                // Format final response with citations
+                return formatResponseWithCitationss(responseWithCitations);
             }
+
             return "Unsupported model type";
+
         } catch (Exception e) {
             log.error("[requestId={}] Document search failed", requestId, e);
             return "I couldn't find relevant information: " + e.getMessage();
         }
+    }
+
+    /**
+     * Format response with citations
+     */
+    private String formatResponseWithCitations(CitationModel.ResponseWithCitations responseWithCitations) {
+        StringBuilder formatted = new StringBuilder();
+
+        // Add the answer with inline citations
+        formatted.append(responseWithCitations.getAnswer());
+
+        // Add citation list
+        if (responseWithCitations.getCitations() != null &&
+                !responseWithCitations.getCitations().isEmpty()) {
+
+            formatted.append(citationService.formatCitationsAsText(responseWithCitations.getCitations()));
+        }
+
+        return formatted.toString();
     }
 
     private String executeHybridAction(Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
