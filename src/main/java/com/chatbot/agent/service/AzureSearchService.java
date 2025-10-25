@@ -144,9 +144,11 @@ public class AzureSearchService {
     /**
      * Search and return chunks with metadata
      */
-    public List<CitationModel.ChunkWithMetadata> searchChunksWithMetadata(Long chatbotId,
-                                                                          String question,
-                                                                          int topK) {
+    public List<CitationModel.ChunkWithMetadata> searchChunksWithMetadata(
+            Long chatbotId,
+            String question,
+            int topK) {
+
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Searching Azure Search with metadata: topK={}", requestId, topK);
 
@@ -158,7 +160,6 @@ public class AzureSearchService {
                 // may not have chunk_start_pos / chunk_end_pos in the index schema which will
                 // cause Azure Search to return 400. Remove those fields from the select to be
                 // defensive. If you control the index, add those fields to the index schema.
-                // "section_title",
                 .setSelect("chunk_text", "document_name", "page_number", "section_title",
                         "document_id", "chunk_index");
 
@@ -168,19 +169,53 @@ public class AzureSearchService {
             Iterable<SearchResult> results = searchClient.search(question, options, null);
             int rank = 0;
 
+            // CHANGED: Step 1 – Collect all results and raw scores first, because Azure
+            //           returns unnormalized BM25 or vector scores (e.g., 11, 8.7, 2.3)
+            //           and we want to normalize them later into a 0–1 range.
+            List<SearchResult> resultList = new ArrayList<>();
+            List<Double> rawScores = new ArrayList<>();
+
             for (SearchResult result : results) {
+                resultList.add(result);
+
+                double rawScoreValue;
+                try {
+                    rawScoreValue = result.getScore(); // handles both double and Double
+                } catch (Exception ex) {
+                    rawScoreValue = 0.0; // fallback default
+                }
+
+                rawScores.add(rawScoreValue);
+            }
+
+            // CHANGED: Step 2 – Compute the maximum raw score per query
+            //           so we can normalize all scores relative to it.
+            double maxScore = rawScores.stream()
+                    .mapToDouble(Double::doubleValue)
+                    .max()
+                    .orElse(1.0);
+
+            // Optional: Debug logging for transparency
+            log.debug("[requestId={}] Azure raw scores={}, maxScore={}",
+                    requestId, rawScores, maxScore);
+
+            // CHANGED: Step 3 – Normalize scores and build chunks
+            for (int i = 0; i < resultList.size(); i++) {
+                SearchResult result = resultList.get(i);
                 Map<String, Object> doc = result.getDocument(Map.class);
 
                 CitationModel.ChunkWithMetadata chunk = new CitationModel.ChunkWithMetadata();
                 chunk.setChunkText((String) doc.get("chunk_text"));
                 chunk.setDocumentName((String) doc.get("document_name"));
 
-                // Defensive numeric parsing: Azure may return Integer/Long/Double depending on index/schema
+                // Defensive numeric parsing: Azure may return Integer/Long/Double
                 Object pn = doc.get("page_number");
                 if (pn instanceof Number) {
                     chunk.setPageNumber(((Number) pn).intValue());
                 } else if (pn != null) {
-                    try { chunk.setPageNumber(Integer.parseInt(pn.toString())); } catch (NumberFormatException ignored) {}
+                    try {
+                        chunk.setPageNumber(Integer.parseInt(pn.toString()));
+                    } catch (NumberFormatException ignored) {}
                 }
 
                 Object section = doc.get("section_title");
@@ -190,40 +225,44 @@ public class AzureSearchService {
                 if (did instanceof Number) {
                     chunk.setDocumentId(((Number) did).longValue());
                 } else if (did != null) {
-                    try { chunk.setDocumentId(Long.parseLong(did.toString())); } catch (NumberFormatException ignored) {}
+                    try {
+                        chunk.setDocumentId(Long.parseLong(did.toString()));
+                    } catch (NumberFormatException ignored) {}
                 }
 
                 Object ci = doc.get("chunk_index");
                 if (ci instanceof Number) {
                     chunk.setChunkIndex(((Number) ci).intValue());
                 } else if (ci != null) {
-                    try { chunk.setChunkIndex(Integer.parseInt(ci.toString())); } catch (NumberFormatException ignored) {}
+                    try {
+                        chunk.setChunkIndex(Integer.parseInt(ci.toString()));
+                    } catch (NumberFormatException ignored) {}
                 }
-                 // chunk_start_pos / chunk_end_pos may not exist in the index schema; attempt
-                 // to read them defensively if present.
-                 if (doc.get("chunk_start_pos") != null) {
-                     try {
-                         chunk.setChunkStartPos(((Number) doc.get("chunk_start_pos")).intValue());
-                     } catch (ClassCastException ex) {
-                         // ignore - field not present in expected type
-                     }
-                 }
-                 if (doc.get("chunk_end_pos") != null) {
-                     try {
-                         chunk.setChunkEndPos(((Number) doc.get("chunk_end_pos")).intValue());
-                     } catch (ClassCastException ex) {
-                         // ignore
-                     }
-                 }
 
-                  // Azure Search score (0-1, higher is better)
-                  Double score = result.getScore();
-                  chunk.setSimilarityScore(score != null ? score.floatValue() : 0.0f);
+                // chunk_start_pos / chunk_end_pos may not exist in index schema
+                if (doc.get("chunk_start_pos") != null) {
+                    try {
+                        chunk.setChunkStartPos(((Number) doc.get("chunk_start_pos")).intValue());
+                    } catch (ClassCastException ex) {
+                        // ignore - field not present in expected type
+                    }
+                }
+                if (doc.get("chunk_end_pos") != null) {
+                    try {
+                        chunk.setChunkEndPos(((Number) doc.get("chunk_end_pos")).intValue());
+                    } catch (ClassCastException ex) {
+                        // ignore
+                    }
+                }
 
-                // Add the constructed chunk to the result list
+                // CHANGED: Step 4 – Normalize raw score into [0, 1]
+                Double rawScore = rawScores.get(i);
+                float normalizedScore = (float) (rawScore / maxScore);
+                if (normalizedScore > 1.0f) normalizedScore = 1.0f; // safety cap
+                chunk.setSimilarityScore(normalizedScore);
+
                 chunks.add(chunk);
-
-             }
+            }
 
             log.info("[requestId={}] Retrieved {} chunks with metadata from Azure Search",
                     requestId, chunks.size());
