@@ -1,6 +1,7 @@
 package com.chatbot.agent.service;
 
 import com.chatbot.agent.exception.VectorStoreException;
+import com.chatbot.agent.model.CitationModel;
 import org.postgresql.util.PGobject;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -180,5 +181,108 @@ public class VectorStoreService {
         return IntStream.range(0, array.length)
                 .mapToObj(i -> Float.toString(array[i]))
                 .collect(Collectors.joining(","));
+    }
+
+    /**
+     * Index document with metadata
+     */
+    public void indexDocumentWithMetadata(Long chatbotId, Long documentId,
+                                          List<DocumentService.ChunkWithMetadata> chunksWithMetadata) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Indexing {} chunks with metadata", requestId, chunksWithMetadata.size());
+
+        String sql = "INSERT INTO document_vectors (chatbot_id, document_id, chunk_index, chunk_text, embedding, " +
+                "document_name, page_number, section_title, chunk_start_pos, chunk_end_pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        try {
+            // Generate embeddings
+            List<float[]> embeddings = chunksWithMetadata.stream()
+                    .map(chunk -> ollamaService.generateEmbedding(chunk.chunkText))
+                    .collect(Collectors.toList());
+
+            List<PGobject> pgVectors = embeddings.stream()
+                    .map(this::toPGVector)
+                    .collect(Collectors.toList());
+
+            // Batch insert with metadata
+            vectorJdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws SQLException {
+                    DocumentService.ChunkWithMetadata chunk = chunksWithMetadata.get(i);
+                    ps.setLong(1, chatbotId);
+                    ps.setLong(2, documentId);
+                    ps.setInt(3, chunk.chunkIndex);
+                    ps.setString(4, chunk.chunkText);
+                    ps.setObject(5, pgVectors.get(i));
+                    ps.setString(6, chunk.documentName);
+                    ps.setInt(7, chunk.pageNumber != null ? chunk.pageNumber : 0);
+                    ps.setString(8, chunk.sectionTitle);
+                    ps.setInt(9, chunk.chunkStartPos != null ? chunk.chunkStartPos : 0);
+                    ps.setInt(10, chunk.chunkEndPos != null ? chunk.chunkEndPos : 0);
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return chunksWithMetadata.size();
+                }
+            });
+
+            log.info("[requestId={}] Successfully indexed {} chunks with metadata",
+                    requestId, chunksWithMetadata.size());
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Failed to index with metadata", requestId, e);
+            throw new VectorStoreException("Failed to index document with metadata", e);
+        }
+    }
+
+    /**
+     * Search and return chunks WITH metadata
+     */
+    public List<CitationModel.ChunkWithMetadata> searchChunksWithMetadata(Long chatbotId, String question, int topK) {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Searching chunks with metadata: topK={}", requestId, topK);
+
+        try {
+            // Generate embedding
+            float[] questionEmbedding = ollamaService.generateEmbedding(question);
+            String vectorString = toVectorString(questionEmbedding);
+
+            // Query with metadata
+            String sql = "SELECT chunk_text, document_name, page_number, section_title, " +
+                    "document_id, chunk_index, chunk_start_pos, chunk_end_pos, " +
+                    "1 - (embedding <=> ?::vector) as similarity_score " +
+                    "FROM document_vectors " +
+                    "WHERE chatbot_id = ? " +
+                    "ORDER BY embedding <=> ?::vector " +
+                    "LIMIT ?";
+
+            List<CitationModel.ChunkWithMetadata> results = vectorJdbcTemplate.query(
+                    sql,
+                    new Object[]{vectorString, chatbotId, vectorString, topK},
+                    new int[]{Types.OTHER, Types.BIGINT, Types.OTHER, Types.INTEGER},
+                    (rs, rowNum) -> {
+                        CitationModel.ChunkWithMetadata chunk = new CitationModel.ChunkWithMetadata();
+                        chunk.setChunkText(rs.getString("chunk_text"));
+                        chunk.setDocumentName(rs.getString("document_name"));
+                        chunk.setPageNumber(rs.getInt("page_number"));
+                        chunk.setSectionTitle(rs.getString("section_title"));
+                        chunk.setDocumentId(rs.getLong("document_id"));
+                        chunk.setChunkIndex(rs.getInt("chunk_index"));
+                        chunk.setChunkStartPos(rs.getInt("chunk_start_pos"));
+                        chunk.setChunkEndPos(rs.getInt("chunk_end_pos"));
+                        chunk.setSimilarityScore(rs.getFloat("similarity_score"));
+                        return chunk;
+                    }
+            );
+
+            log.info("[requestId={}] Found {} chunks with metadata", requestId, results.size());
+            return results;
+
+        } catch (Exception e) {
+            log.error("[requestId={}] Search with metadata failed", requestId, e);
+            throw new VectorStoreException("Failed to search with metadata", e);
+        }
     }
 }
