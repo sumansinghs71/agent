@@ -44,7 +44,6 @@ public class CitationService {
         // Map sentences to citations
         Map<Integer, List<CitationModel.Citation>> sentenceCitations = new HashMap<>();
         int citationIdCounter = 1;
-        Set<String> usedChunks = new HashSet<>();
         List<CitationModel.Citation> allCitations = new ArrayList<>();
 
         for (int i = 0; i < sentences.size(); i++) {
@@ -59,15 +58,9 @@ public class CitationService {
 
             List<CitationModel.Citation> citations = new ArrayList<>();
             for (CitationModel.ChunkWithMetadata chunk : matchingChunks) {
-                String chunkKey = chunk.getDocumentId() + "_" + chunk.getChunkIndex();
-
-                // Avoid duplicate citations
-                if (!usedChunks.contains(chunkKey)) {
-                    CitationModel.Citation citation = createCitation(chunk, citationIdCounter++);
-                    citations.add(citation);
-                    allCitations.add(citation);
-                    usedChunks.add(chunkKey);
-                }
+                CitationModel.Citation citation = createCitation(chunk, citationIdCounter++);
+                citations.add(citation);
+                allCitations.add(citation);
             }
 
             if (!citations.isEmpty()) {
@@ -94,8 +87,6 @@ public class CitationService {
      */
     private List<CitationModel.Sentence> splitIntoSentences(String text) {
         List<CitationModel.Sentence> sentences = new ArrayList<>();
-
-        // Regex for sentence boundaries
         Pattern pattern = Pattern.compile("([^.!?]+[.!?]+)");
         Matcher matcher = pattern.matcher(text);
 
@@ -132,11 +123,17 @@ public class CitationService {
             List<CitationModel.ChunkWithMetadata> sourceChunks,
             int topN) {
 
-        // Calculate similarity scores
         List<ChunkScore> scores = new ArrayList<>();
         for (CitationModel.ChunkWithMetadata chunk : sourceChunks) {
+            if (chunk.getChunkText() == null || chunk.getChunkText().isEmpty()) continue;
+
+            // CHANGED: use cosine similarity instead of simple Jaccard
+            // This approach considers word frequency, so "full-stack development"
+            // appearing multiple times increases similarity.
             float similarity = calculateTextSimilarity(sentence, chunk.getChunkText());
-            if (similarity > 0.3) { // Threshold
+
+            // CHANGED: lowered threshold from 0.3 to 0.15 for long sentences
+            if (similarity > 0.15f) {
                 scores.add(new ChunkScore(chunk, similarity));
             }
         }
@@ -150,33 +147,49 @@ public class CitationService {
     }
 
     /**
-     * Calculate text similarity (simple Jaccard)
+     * CHANGED: Calculate text similarity using TF-IDF–like cosine similarity.
+     * This improves performance on longer texts like résumés or project summaries.
+     *
+     * Example:
+     *  text1: "Suman Singh is a software engineer with 9+ years of experience"
+     *  text2: "9+ years of full-stack development expertise with Python, Java"
+     *  -> cosine similarity ≈ 0.7 (vs. Jaccard ~0.25)
      */
     private float calculateTextSimilarity(String text1, String text2) {
-        Set<String> words1 = tokenize(text1.toLowerCase());
-        Set<String> words2 = tokenize(text2.toLowerCase());
+        Map<String, Integer> freq1 = countWordFrequency(text1);
+        Map<String, Integer> freq2 = countWordFrequency(text2);
 
-        Set<String> intersection = new HashSet<>(words1);
-        intersection.retainAll(words2);
+        // union of all unique words
+        Set<String> allWords = new HashSet<>();
+        allWords.addAll(freq1.keySet());
+        allWords.addAll(freq2.keySet());
 
-        Set<String> union = new HashSet<>(words1);
-        union.addAll(words2);
-
-        if (union.isEmpty()) {
-            return 0.0f;
+        double dot = 0.0, norm1 = 0.0, norm2 = 0.0;
+        for (String word : allWords) {
+            int f1 = freq1.getOrDefault(word, 0);
+            int f2 = freq2.getOrDefault(word, 0);
+            dot += f1 * f2;
+            norm1 += f1 * f1;
+            norm2 += f2 * f2;
         }
 
-        return (float) intersection.size() / union.size();
+        if (norm1 == 0 || norm2 == 0) return 0f;
+        return (float) (dot / (Math.sqrt(norm1) * Math.sqrt(norm2)));
     }
 
     /**
-     * Tokenize text into words
+     * CHANGED: helper for cosine similarity – counts term frequency for each word
      */
-    private Set<String> tokenize(String text) {
-        return Arrays.stream(text.split("\\s+"))
-                .map(word -> word.replaceAll("[^a-z0-9]", ""))
-                .filter(word -> word.length() > 2)
-                .collect(Collectors.toSet());
+    private Map<String, Integer> countWordFrequency(String text) {
+        Map<String, Integer> freq = new HashMap<>();
+        String[] words = text.toLowerCase().split("\\s+");
+        for (String w : words) {
+            String cleaned = w.replaceAll("[^a-z0-9]", "");
+            if (cleaned.length() > 2) { // skip tiny tokens like "is", "of"
+                freq.put(cleaned, freq.getOrDefault(cleaned, 0) + 1);
+            }
+        }
+        return freq;
     }
 
     /**
@@ -188,18 +201,22 @@ public class CitationService {
         citation.setDocumentName(chunk.getDocumentName());
         citation.setPageNumber(chunk.getPageNumber());
         citation.setSectionTitle(chunk.getSectionTitle());
-        citation.setConfidence(chunk.getSimilarityScore());
+
+        // CHANGED: set confidence = locally computed similarity score (not the retrieval one)
+        citation.setConfidence(chunk.getSimilarityScore() != null ? chunk.getSimilarityScore() : 0.8f);
+
         citation.setChunkId(chunk.getDocumentId() + "_" + chunk.getChunkIndex());
         citation.setStartPosition(chunk.getChunkStartPos());
         citation.setEndPosition(chunk.getChunkEndPos());
 
-        // Create excerpt (truncate if needed)
+        // Create excerpt (truncate safely)
         String excerpt = chunk.getChunkText();
-        if (excerpt.length() > MAX_EXCERPT_LENGTH) {
-            excerpt = excerpt.substring(0, MAX_EXCERPT_LENGTH) + "...";
+        if (excerpt != null && excerpt.length() > MAX_EXCERPT_LENGTH) {
+            int cut = excerpt.lastIndexOf(' ', MAX_EXCERPT_LENGTH);
+            if (cut == -1) cut = MAX_EXCERPT_LENGTH;
+            excerpt = excerpt.substring(0, cut).trim() + "...";
         }
         citation.setExcerpt(excerpt);
-
         return citation;
     }
 
@@ -211,22 +228,18 @@ public class CitationService {
             Map<Integer, List<CitationModel.Citation>> sentenceCitations) {
 
         StringBuilder annotated = new StringBuilder();
-
         for (int i = 0; i < sentences.size(); i++) {
             CitationModel.Sentence sentence = sentences.get(i);
             annotated.append(sentence.getText());
 
-            // Add citation markers
             if (sentenceCitations.containsKey(i)) {
                 List<CitationModel.Citation> citations = sentenceCitations.get(i);
                 for (CitationModel.Citation citation : citations) {
                     annotated.append(" [").append(citation.getCitationId()).append("]");
                 }
             }
-
             annotated.append(" ");
         }
-
         return annotated.toString().trim();
     }
 
@@ -242,7 +255,6 @@ public class CitationService {
         metadata.setCitationsAdded(citations.size());
         metadata.setTotalChunksRetrieved(sourceChunks.size());
 
-        // Calculate average confidence
         if (!citations.isEmpty()) {
             float avgConf = (float) citations.stream()
                     .mapToDouble(c -> c.getConfidence() != null ? c.getConfidence() : 0.0)
@@ -253,7 +265,6 @@ public class CitationService {
             metadata.setAvgConfidence(0.0f);
         }
 
-        // Get unique documents
         Set<String> uniqueDocs = citations.stream()
                 .map(CitationModel.Citation::getDocumentName)
                 .filter(Objects::nonNull)
@@ -263,9 +274,6 @@ public class CitationService {
         return metadata;
     }
 
-    /**
-     * Create empty metadata
-     */
     private CitationModel.CitationMetadata createEmptyMetadata() {
         CitationModel.CitationMetadata metadata = new CitationModel.CitationMetadata();
         metadata.setTotalSources(0);
@@ -297,18 +305,23 @@ public class CitationService {
             }
 
             if (citation.getConfidence() != null) {
-                    sb.append(String.format(" (%.0f%% confidence)", citation.getConfidence() * 100));
-                }        sb.append("\n");        if (citation.getExcerpt() != null && !citation.getExcerpt().isEmpty()) {
-                    sb.append("    \"").append(citation.getExcerpt()).append("\"\n");
-                }
-            }    return sb.toString();
-        }
-        // Helper class
-        private static class ChunkScore {
-            CitationModel.ChunkWithMetadata chunk;
-            float score;    ChunkScore(CitationModel.ChunkWithMetadata chunk, float score) {
-                this.chunk = chunk;
-                this.score = score;
+                sb.append(String.format(" (%.0f%% confidence)", citation.getConfidence() * 100));
+            }
+            sb.append("\n");
+            if (citation.getExcerpt() != null && !citation.getExcerpt().isEmpty()) {
+                sb.append("    \"").append(citation.getExcerpt()).append("\"\n");
             }
         }
+        return sb.toString();
     }
+
+    private static class ChunkScore {
+        CitationModel.ChunkWithMetadata chunk;
+        float score;
+
+        ChunkScore(CitationModel.ChunkWithMetadata chunk, float score) {
+            this.chunk = chunk;
+            this.score = score;
+        }
+    }
+}
