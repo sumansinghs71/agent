@@ -12,10 +12,11 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Repository
 public class ToolRepository {
@@ -70,14 +71,46 @@ public class ToolRepository {
                 throw new RuntimeException("Failed to parse HTTP headers JSON", e);
             }
         }
-
+        tool.setPythonCode(rs.getString("python_code"));
+        tool.setPythonVersion(rs.getString("python_version"));
+        List<String> modules = Optional.ofNullable(rs.getString("allowed_modules"))
+                .filter(s -> !s.isBlank())
+                .map(s -> {
+                    try {
+                        return new ObjectMapper().readValue(s, new TypeReference<List<String>>() {});
+                    } catch (JsonProcessingException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .orElseGet(Collections::emptyList);
+        tool.setAllowedModules(modules);
+        tool.setJsCode(rs.getString("js_code"));
         tool.setHttpBody(rs.getString("http_body"));
-        tool.setTimeout(rs.getInt("timeout"));
+        tool.setTimeout(rs.getLong("timeout"));
         tool.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
         tool.setUpdatedAt(rs.getTimestamp("updated_at").toLocalDateTime());
-
         return tool;
     };
+
+    private List<String> objecttoList(ResultSet rs, String col) throws SQLException {
+        Object obj = rs.getObject(col);
+        if (obj instanceof List) {
+            @SuppressWarnings("unchecked")
+            List<Object> raw = (List<Object>) obj;
+            return raw.stream().map(o -> o == null ? null : o.toString()).collect(Collectors.toList());
+        }
+        if (obj instanceof Object[]) {
+            return Arrays.stream((Object[]) obj).map(o -> o == null ? null : o.toString()).collect(Collectors.toList());
+        }
+        String text = rs.getString(col);
+        if (text == null || text.isBlank()) return Collections.emptyList();
+        try {
+            return objectMapper.readValue(text, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return Arrays.stream(text.split(",")).map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toList());
+        }
+    }
+
 
     public ToolModel.Tool save(ToolModel.Tool tool) {
         if (tool.getId() == null) {
@@ -110,7 +143,7 @@ public class ToolRepository {
             ps.setString(10, tool.getHttpPath());
             ps.setString(11, toJson(tool.getHttpHeaders()));
             ps.setString(12, tool.getHttpBody());
-            ps.setInt(13, tool.getTimeout() != null ? tool.getTimeout() : 30000);
+            ps.setLong(13, tool.getTimeout() != null ? tool.getTimeout() : 30000);
             return ps;
         }, keyHolder);
 
