@@ -2,8 +2,6 @@ package com.chatbot.agent.controller;
 
 import com.chatbot.agent.model.Model;
 import com.chatbot.agent.service.DocumentService;
-import com.chatbot.agent.model.Model;
-import com.chatbot.agent.service.DocumentService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;

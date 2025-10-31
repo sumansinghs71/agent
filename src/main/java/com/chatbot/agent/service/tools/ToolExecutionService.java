@@ -1,4 +1,4 @@
-package com.chatbot.agent.service;
+package com.chatbot.agent.service.tools;
 
 import com.chatbot.agent.config.DynamicDataSourceConfig;
 import com.chatbot.agent.model.ToolModel;
@@ -32,19 +32,22 @@ public class ToolExecutionService {
     private final ObjectMapper objectMapper;
     private final RuntimeGuardrailsService runtimeGuardrailsService;
     private final GuardrailLogService guardrailLogService;
+    private final PythonJavaScriptToolExecutor pyJsExecutor;
 
     public ToolExecutionService(ToolRepository toolRepository,
                                 DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager,
                                 RestTemplate restTemplate,
                                 ObjectMapper objectMapper,
                                 RuntimeGuardrailsService runtimeGuardrailsService,
-                                GuardrailLogService guardrailLogService) {
+                                GuardrailLogService guardrailLogService,
+                                PythonJavaScriptToolExecutor pyJsExecutor) {
         this.toolRepository = toolRepository;
         this.dataSourceManager = dataSourceManager;
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
         this.runtimeGuardrailsService = runtimeGuardrailsService;
         this.guardrailLogService = guardrailLogService;
+        this.pyJsExecutor = pyJsExecutor;
     }
 
     public ToolModel.ToolExecutionResult executeTool(Long chatbotId,
@@ -83,18 +86,18 @@ public class ToolExecutionService {
 
             result.setSuccess(true);
             result.setData(data);
-            result.setExecutionTimeMs((int)(System.currentTimeMillis() - startTime));
+            result.setExecutionTimeMs((long) (System.currentTimeMillis() - startTime));
 
         } catch (SecurityException e) {
             log.error("[requestId={}] Blocked by guardrails: {}", requestId, e.getMessage());
             result.setSuccess(false);
             result.setError("Security check failed: " + e.getMessage());
-            result.setExecutionTimeMs((int)(System.currentTimeMillis() - startTime));
+            result.setExecutionTimeMs((long) (System.currentTimeMillis() - startTime));
         } catch (Exception e) {
             log.error("[requestId={}] Tool execution failed", requestId, e);
             result.setSuccess(false);
             result.setError(e.getMessage());
-            result.setExecutionTimeMs((int)(System.currentTimeMillis() - startTime));
+            result.setExecutionTimeMs((long) (System.currentTimeMillis() - startTime));
         }
 
         return result;
@@ -125,22 +128,62 @@ public class ToolExecutionService {
             String sql = tool.getSqlQuery();
             List<Object> paramValues = new ArrayList<>();
 
-            Pattern pattern = Pattern.compile(":([a-zA-Z0-9_]+)");
+        /*
+         Pattern explanation (Java string literal):
+         - Matches any of:
+           1) double-quoted template:   "{{$name}}"
+           2) single-quoted template:   '{{$name}}'
+           3) unquoted template:        {{$name}}
+           4) colon-style parameter:    :name
+
+         Capturing groups:
+         group(1) => name inside double-quoted {{$...}}
+         group(2) => name inside single-quoted {{$...}}
+         group(3) => name inside unquoted {{$...}}
+         group(4) => name for :name
+         We'll pick the first non-null group to obtain the parameter name.
+        */
+            Pattern pattern = Pattern.compile(
+                    "\"\\{\\{\\$([A-Za-z0-9_]+)\\}\\}\""        // "{{$name}}"
+                            + "|'\\{\\{\\$([A-Za-z0-9_]+)\\}\\}'" // '{{$name}}'
+                            + "|\\{\\{\\$([A-Za-z0-9_]+)\\}\\}"   // {{$name}}
+                            + "|:([A-Za-z0-9_]+)"                 // :name
+            );
+
             Matcher matcher = pattern.matcher(sql);
             StringBuffer sb = new StringBuffer();
 
             while (matcher.find()) {
-                String paramName = matcher.group(1);
+                String paramName = null;
+                if (matcher.group(1) != null) paramName = matcher.group(1);
+                else if (matcher.group(2) != null) paramName = matcher.group(2);
+                else if (matcher.group(3) != null) paramName = matcher.group(3);
+                else if (matcher.group(4) != null) paramName = matcher.group(4);
+
+                if (paramName == null) {
+                    // Shouldn't happen, defensive check
+                    throw new IllegalStateException("Matched parameter but could not determine name");
+                }
+
                 if (!params.containsKey(paramName)) {
                     throw new IllegalArgumentException("Missing parameter: " + paramName);
                 }
-                paramValues.add(params.get(paramName));
+
+                // Append replacement with a single JDBC placeholder.
+                // Use Matcher.appendReplacement to preserve other parts of the SQL.
                 matcher.appendReplacement(sb, "?");
+
+                // Add the parameter value in the same order as placeholders.
+                paramValues.add(params.get(paramName));
             }
             matcher.appendTail(sb);
 
+            String finalSql = sb.toString();
+            log.debug("[requestId={}] Final SQL: {}", requestId, finalSql);
+            log.debug("[requestId={}] Param values: {}", requestId, paramValues);
+
             List<Map<String, Object>> result = jdbcTemplate.queryForList(
-                    sb.toString(), paramValues.toArray());
+                    finalSql, paramValues.toArray());
 
             log.info("[requestId={}] SQL returned {} rows", requestId, result.size());
             return result;
@@ -199,12 +242,18 @@ public class ToolExecutionService {
         }
     }
 
-    private Object executePythonTool(ToolModel.Tool tool, Map<String, Object> params) {
-        throw new UnsupportedOperationException("Python execution not yet implemented");
+    private Object executePythonTool(ToolModel.Tool tool, Map<String, Object> params) throws Exception {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing Python tool: {}", requestId, tool.getFuncNameKey());
+        Map<String, Object> result = pyJsExecutor.executePythonTool(tool, params);
+        return result;
     }
 
-    private Object executeJavaScriptTool(ToolModel.Tool tool, Map<String, Object> params) {
-        throw new UnsupportedOperationException("JavaScript execution not yet implemented");
+    private Object executeJavaScriptTool(ToolModel.Tool tool, Map<String, Object> params) throws Exception {
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Executing JavaScript tool: {}", requestId, tool.getFuncNameKey());
+        Map<String, Object> result = pyJsExecutor.executeJavaScriptTool(tool, params);
+        return result;
     }
 
     private Map<String, Object> validateAndPrepareParameters(ToolModel.Tool tool,
