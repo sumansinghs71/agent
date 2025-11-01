@@ -134,3 +134,12 @@ CREATE TABLE IF NOT EXISTS citation_log (
 );
 
 CREATE INDEX idx_citation_chatbot ON citation_log(chatbot_id, created_at);
+
+
+select * from chatbot;
+select * from tool;
+
+
+
+
+
