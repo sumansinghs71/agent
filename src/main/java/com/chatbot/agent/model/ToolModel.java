@@ -16,13 +16,28 @@ public class ToolModel {
         private String prompt;
         private List<ToolParameter> params;
         private FunctionType functionType;
-        private String dataSource;
-        private String sqlQuery;
+
+        // REST API fields
         private String httpMethod;
         private String httpPath;
         private Map<String, String> httpHeaders;
         private String httpBody;
-        private Integer timeout;
+
+        // SQL fields
+        private String sqlQuery;
+        private String dataSource;
+
+        // PYTHON fields (NEW)
+        private String pythonCode;
+        private String pythonVersion; // "3.x" or specific version
+        private List<String> allowedModules; // Whitelist of allowed Python modules
+
+        // JAVASCRIPT fields (NEW)
+        private String jsCode;
+        private String jsEngine; // "nashorn" or "graalvm"
+
+        // Common fields
+        private Long timeout;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
     }
@@ -30,31 +45,21 @@ public class ToolModel {
     @Data
     public static class ToolParameter {
         private String paramNameKey;
-        private String paramType;
         private String paramDescription;
+        private String paramType; // string, integer, boolean, float, array, object
         private boolean required;
-        private String defaultValue;
+        private Object defaultValue;
+        private String validation; // regex or validation rules
     }
 
-    @Data
-    public static class ColumnDefinition {
-        private String columnId;
-        private String label;
-        private String type;
-    }
-
-    @Data
-    public static class ToolExecutionLog {
-        private Long id;
-        private Long toolId;
-        private Long chatbotId;
-        private String sessionId;
-        private Map<String, Object> inputParams;
-        private String outputResult;
-        private ExecutionStatus status;
-        private String errorMessage;
-        private Integer executionTimeMs;
-        private LocalDateTime executedAt;
+    /**
+     * Function types supported by the system
+     */
+    public enum FunctionType {
+        REST,       // HTTP API call
+        SQL,        // Database query
+        PYTHON,     // Python code execution (NEW)
+        JAVASCRIPT  // JavaScript code execution (NEW)
     }
 
     @Data
@@ -68,14 +73,31 @@ public class ToolModel {
         private boolean success;
         private Object data;
         private String error;
-        private Integer executionTimeMs;
+        private Long executionTimeMs;
+        private Map<String, Object> metadata;
     }
 
-    public enum FunctionType {
-        SQL, REST, PYTHON, JAVASCRIPT
+    /**
+     * Python-specific configuration
+     */
+    @Data
+    public static class PythonToolConfig {
+        private String interpreterPath; // Path to Python interpreter
+        private List<String> allowedModules; // json, math, datetime, re
+        private Map<String, String> environmentVars;
+        private boolean enableNumpy;
+        private boolean enablePandas;
+        private int maxMemoryMB; // Memory limit
     }
 
-    public enum ExecutionStatus {
-        SUCCESS, FAILED, TIMEOUT
+    /**
+     * JavaScript-specific configuration
+     */
+    @Data
+    public static class JavaScriptToolConfig {
+        private String engine; // "nashorn" or "graalvm"
+        private boolean enableConsole; // Allow console.log
+        private Map<String, Object> globalVariables;
+        private int maxStackSize;
     }
 }
