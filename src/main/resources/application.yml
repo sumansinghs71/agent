@@ -20,11 +20,11 @@
   azure:
     openai:
       base-url: https://chatbot-openai-sst.openai.azure.com
-      api-key: ${AZURE_OPENAI_API_KEY}
+      api-key:
       deployment-name: gpt-35-turbo
       api-version: 2021-04-30
       search-endpoint: https://chatbot-search-sst.search.windows.net
-      search-key: ${AZURE_SEARCH_API_KEY}
+      search-key:
       search-index: chatbot-indexx
 
   llama:
@@ -33,8 +33,8 @@
     generation-model: llama2
     vector-db:
       url: jdbc:postgresql://localhost:5432/vector_store
-      username: sumansingh
-      password: ${BS2_DB_PASSWORD}
+      username:
+      password:
 
   document:
     upload-dir: /Users/sumansingh/Downloads/Docs/
