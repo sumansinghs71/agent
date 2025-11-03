@@ -1,9 +1,6 @@
 package com.chatbot.agent.service;
 
-import com.chatbot.agent.model.CitationModel;
-import com.chatbot.agent.model.Model;
-import com.chatbot.agent.model.ToolModel;
-import com.chatbot.agent.model.GuardrailModel;
+import com.chatbot.agent.model.*;
 import com.chatbot.agent.repository.ChatbotRepository;
 import com.chatbot.agent.service.citation.CitationService;
 import com.chatbot.agent.service.guardrails.*;
@@ -204,8 +201,8 @@ public class ReasoningAgentService {
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
-            ToolModel.ToolExecutionResult result = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest);
+            ToolExecutionResult result = toolExecutionService.executeTool(
+                    chatbot.getId(),"system", toolRequest);
 
             if (!result.isSuccess()) {
                 return createErrorResponse("I tried to fetch the data but encountered an error: " + result.getError());
@@ -321,8 +318,8 @@ public class ReasoningAgentService {
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
-            ToolModel.ToolExecutionResult toolResult = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest);
+            ToolExecutionResult toolResult = toolExecutionService.executeTool(
+                    chatbot.getId(), "system",toolRequest);
 
             // Get document chunks
             List<CitationModel.ChunkWithMetadata> chunks;
@@ -655,8 +652,8 @@ public class ReasoningAgentService {
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
-            ToolModel.ToolExecutionResult result = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest);
+            ToolExecutionResult result = toolExecutionService.executeTool(
+                    chatbot.getId(), "system",toolRequest);
 
             if (!result.isSuccess()) {
                 return "I tried to fetch the data but encountered an error: " + result.getError();
@@ -788,8 +785,8 @@ public class ReasoningAgentService {
             toolRequest.setFuncNameKey(intent.getToolName());
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
-            ToolModel.ToolExecutionResult toolResult = toolExecutionService.executeTool(
-                    chatbot.getId(), toolRequest);
+            ToolExecutionResult toolResult = toolExecutionService.executeTool(
+                    chatbot.getId(), "system",toolRequest);
 
             String documentContext = "";
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {

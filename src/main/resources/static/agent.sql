@@ -140,6 +140,46 @@ select * from chatbot;
 select * from tool;
 
 
+ALTER TABLE tool_execution_log 
+ADD COLUMN execution_id VARCHAR(255),
+ADD COLUMN parent_tool_id VARCHAR(255),
+ADD COLUMN call_depth INT DEFAULT 0,
+ADD COLUMN execution_chain JSON,
+ADD INDEX idx_execution_id (execution_id);
+
+
+
+-- Add execution tracking columns to tool_execution_log table
+ALTER TABLE tool_execution_log 
+  MODIFY COLUMN execution_chain TEXT,
+  ADD COLUMN total_tools_called INT DEFAULT 1,
+  ADD COLUMN user_id VARCHAR(255);
+
+
+
+-- Add indexes for performance
+CREATE INDEX idx_execution_id 
+ON tool_execution_log(execution_id);
+
+CREATE INDEX idx_parent_tool_id 
+ON tool_execution_log(parent_tool_id);
+
+CREATE INDEX idx_tool_execution_chatbot_created 
+ON tool_execution_log(chatbot_id, created_at DESC);
+
+CREATE INDEX idx_tool_execution_user 
+ON tool_execution_log(user_id, created_at DESC);
+
+-- Add comments
+
+ALTER TABLE tool_execution_log
+  MODIFY COLUMN execution_id VARCHAR(255) COMMENT 'Unique ID for the entire execution chain',
+  MODIFY COLUMN parent_tool_id VARCHAR(255) COMMENT 'ID of the tool that called this tool',
+  MODIFY COLUMN call_depth INT DEFAULT 0 COMMENT 'Depth in the call chain (0 = root)',
+  MODIFY COLUMN execution_chain JSON COMMENT 'JSON array of the full call chain',
+  MODIFY COLUMN total_tools_called INT DEFAULT 1 COMMENT 'Total number of tools called in this execution',
+  MODIFY COLUMN user_id VARCHAR(255) COMMENT 'User who initiated the execution';
+
 
 
 
