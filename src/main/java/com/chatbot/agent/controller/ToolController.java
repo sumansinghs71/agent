@@ -1,5 +1,6 @@
 package com.chatbot.agent.controller;
 
+import com.chatbot.agent.model.ToolExecutionResult;
 import com.chatbot.agent.model.ToolModel;
 import com.chatbot.agent.service.tools.ToolExecutionService;
 import com.chatbot.agent.repository.ToolRepository;
@@ -86,11 +87,11 @@ public class ToolController {
      * Test execute a tool directly (for debugging)
      */
     @PostMapping("/{chatbotId}/execute")
-    public ResponseEntity<ToolModel.ToolExecutionResult> executeTool(
+    public ResponseEntity<ToolExecutionResult> executeTool(
             @PathVariable Long chatbotId,
             @RequestBody ToolModel.ToolExecutionRequest request) {
         log.info("Executing tool: {} for chatbotId: {}", request.getFuncNameKey(), chatbotId);
-        ToolModel.ToolExecutionResult result = toolExecutionService.executeTool(chatbotId, request);
+        ToolExecutionResult result = toolExecutionService.executeTool(chatbotId,"test", request);
         return ResponseEntity.ok(result);
     }
 }
