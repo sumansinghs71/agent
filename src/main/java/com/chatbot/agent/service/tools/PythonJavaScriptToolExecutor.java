@@ -4,6 +4,9 @@ import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.exception.CodeValidationException;
 import com.chatbot.agent.model.CodeValidationResult;
 import com.chatbot.agent.model.ToolModel;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.graalvm.polyglot.proxy.ProxyExecutable;
+import org.graalvm.polyglot.proxy.ProxyObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -19,6 +22,7 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Enhanced ToolExecutionService with Python and JavaScript inter-tool communication
@@ -231,10 +235,10 @@ public class PythonJavaScriptToolExecutor {
                 requestId, context.getExecutionId(), tool.getFuncNameKey());
 
         try {
-            // STEP 1: Validate JavaScript code
+            // STEP 1: Validate JavaScript code contents (security/size/etc.)
             validateJavaScriptCode(tool.getJsCode());
 
-            // STEP 2: Validate and wrap code in function(data) { } format
+            // STEP 2: Ensure code is in required format: function(data) { ... return ... }
             CodeValidationResult validation = javascriptCodeWrapper.validateAndWrap(tool);
             if (!validation.isValid()) {
                 throw new CodeValidationException(
@@ -243,91 +247,114 @@ public class PythonJavaScriptToolExecutor {
                         validation.getError()
                 );
             }
-
+            final String wrappedCode = validation.getWrappedCode();
             log.debug("[executionId={}] JavaScript code validated and wrapped", context.getExecutionId());
 
-            // STEP 3: Get GraalVM engine
+            // STEP 3: Acquire JS engine (GraalJS preferred, Nashorn fallback)
             ScriptEngine engine = scriptEngineManager.getEngineByName("graal.js");
+            boolean isGraal = (engine != null);
             if (engine == null) {
-                // Fallback to nashorn
                 engine = scriptEngineManager.getEngineByName("nashorn");
             }
             if (engine == null) {
                 throw new RuntimeException("No JavaScript engine available (GraalVM or Nashorn required)");
             }
 
-            // STEP 4: Inject eztool bridge - THIS ENABLES INTER-TOOL CALLS
+            // STEP 4: Inject inter-tool bridge for JS -> (Java -> other tools)
             EzToolBridge ezToolBridge = new EzToolBridge(context, toolExecutionService);
             engine.put("eztool", ezToolBridge);
 
-            log.debug("[executionId={}] EzToolBridge injected - JavaScript can now call eztool()",
-                    context.getExecutionId());
-
-            // STEP 5: Inject parameters as 'data' object
+            // STEP 5: Prepare native JS object from params (instead of HashMap)
             Map<String, Object> dataObject = new HashMap<>();
             if (params != null) {
                 dataObject.putAll(params);
             }
-            engine.put("data", dataObject);
-            engine.put("logger", log);
 
-            engine.eval("""
-                        var console = {
-                            log: function() {
-                                var msg = Array.prototype.join.call(arguments, ' ');
-                                logger.info('[JS LOG] ' + msg);
-                            },
-                            error: function() {
-                                var msg = Array.prototype.join.call(arguments, ' ');
-                                logger.error('[JS ERROR] ' + msg);
-                            }
-                        };
-                    """);
+            ObjectMapper mapper = new ObjectMapper();
+            String json = mapper.writeValueAsString(dataObject);
+            String safeJson = json
+                    .replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\n", "")
+                    .replace("\r", "");
+            // Create native JS object (no HashMap leak)
+            Object jsArg = engine.eval("JSON.parse('" + safeJson + "')");
 
-            // STEP 6: Execute wrapped code with timeout
+            // STEP 6: Inject console bridge (safe across Graal/Nashorn)
+            if (isGraal) {
+                org.graalvm.polyglot.proxy.ProxyObject console = org.graalvm.polyglot.proxy.ProxyObject.fromMap(
+                        new HashMap<String, Object>() {{
+                            put("log", (org.graalvm.polyglot.proxy.ProxyExecutable) args -> {
+                                String msg = java.util.Arrays.stream(args)
+                                        .map(String::valueOf)
+                                        .collect(java.util.stream.Collectors.joining(" "));
+                                System.out.println("[JS] " + msg);
+                                return null;
+                            });
+                            put("error", (org.graalvm.polyglot.proxy.ProxyExecutable) args -> {
+                                String msg = java.util.Arrays.stream(args)
+                                        .map(String::valueOf)
+                                        .collect(java.util.stream.Collectors.joining(" "));
+                                System.err.println("[JS-ERR] " + msg);
+                                return null;
+                            });
+                            put("warn", (org.graalvm.polyglot.proxy.ProxyExecutable) args -> {
+                                String msg = java.util.Arrays.stream(args)
+                                        .map(String::valueOf)
+                                        .collect(java.util.stream.Collectors.joining(" "));
+                                System.out.println("[JS-WARN] " + msg);
+                                return null;
+                            });
+                        }}
+                );
+                engine.put("console", console);
+            } else {
+                Object console = new Object() {
+                    public void log(Object... args) {
+                        String msg = java.util.Arrays.stream(args)
+                                .map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(" "));
+                        System.out.println("[JS] " + msg);
+                    }
+
+                    public void error(Object... args) {
+                        String msg = java.util.Arrays.stream(args)
+                                .map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(" "));
+                        System.err.println("[JS-ERR] " + msg);
+                    }
+
+                    public void warn(Object... args) {
+                        String msg = java.util.Arrays.stream(args)
+                                .map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(" "));
+                        System.out.println("[JS-WARN] " + msg);
+                    }
+                };
+                engine.put("console", console);
+            }
+
+            // STEP 7: Execute wrapped JS code safely with timeout
             final ScriptEngine finalEngine = engine;
-            final String wrappedCode = validation.getWrappedCode();
-
             Future<Object> future = executorService.submit(() -> {
                 try {
-//                    // Execute: the code is already a function, we need to call it
-//                    Object func = finalEngine.eval("(" + wrappedCode + ")");
-//
-//                    // If it's a function, invoke it with data
-//                    if (func instanceof javax.script.Invocable) {
-//                        javax.script.Invocable invocable = (javax.script.Invocable) finalEngine;
-//                        return invocable.invokeMethod(func, "call", null, dataObject);
-//                    }
-//
-//                    // Otherwise, evaluate it as function call
-//                    return finalEngine.eval("(" + wrappedCode + ")(data)");
-                    // Evaluate code to obtain a callable function
                     Object func = finalEngine.eval("(" + wrappedCode + ")");
-
-                    // Always use Invocable to call it with data
                     Invocable invocable = (Invocable) finalEngine;
-                    return invocable.invokeMethod(func, "call", null, dataObject);
 
-
+                    // ✅ FIXED: pass the *native JS object* (jsArg) instead of dataObject
+                    return invocable.invokeMethod(func, "call", null, jsArg);
                 } catch (Exception e) {
                     throw new RuntimeException("JavaScript execution error: " + e.getMessage(), e);
                 }
             });
 
-            try {
-                long timeout = tool.getTimeout() != null ? tool.getTimeout() : DEFAULT_TIMEOUT_MS;
-                Object result = future.get(timeout, TimeUnit.MILLISECONDS);
+            long timeout = (tool.getTimeout() != null) ? tool.getTimeout() : DEFAULT_TIMEOUT_MS;
+            Object result = future.get(timeout, TimeUnit.MILLISECONDS);
 
-                log.info("[requestId={}] [executionId={}] JavaScript tool executed successfully",
-                        requestId, context.getExecutionId());
+            log.info("[requestId={}] [executionId={}] JavaScript tool executed successfully",
+                    requestId, context.getExecutionId());
 
-                return result;
-
-            } catch (TimeoutException e) {
-                future.cancel(true);
-                throw new TimeoutException("JavaScript execution timed out after " +
-                        (tool.getTimeout() != null ? tool.getTimeout() : DEFAULT_TIMEOUT_MS) + "ms");
-            }
+            return result;
 
         } catch (SecurityException e) {
             log.error("[requestId={}] Security violation in JavaScript tool", requestId, e);
@@ -343,6 +370,7 @@ public class PythonJavaScriptToolExecutor {
             throw new RuntimeException("JavaScript execution error: " + e.getMessage());
         }
     }
+
 
     /**
      * Validate Python code for security issues
