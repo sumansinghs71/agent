@@ -137,8 +137,8 @@ CREATE INDEX idx_citation_chatbot ON citation_log(chatbot_id, created_at);
 
 
 select * from chatbot;
-select * from tool;
-
+select * from tool where chatbot_id=2 and function_type='PYTHON';
+select count(*) from tool;
 
 ALTER TABLE tool_execution_log 
 ADD COLUMN execution_id VARCHAR(255),
@@ -179,7 +179,6 @@ ALTER TABLE tool_execution_log
   MODIFY COLUMN execution_chain JSON COMMENT 'JSON array of the full call chain',
   MODIFY COLUMN total_tools_called INT DEFAULT 1 COMMENT 'Total number of tools called in this execution',
   MODIFY COLUMN user_id VARCHAR(255) COMMENT 'User who initiated the execution';
-
 
 
 
