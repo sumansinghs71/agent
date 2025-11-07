@@ -4,19 +4,21 @@ import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.model.ToolModel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
 /**
- * PythonScriptBuilder - Builds Python scripts with eztool injection
- * <p>
+ * PythonScriptBuilder - Builds Python scripts with eztool & ezLog injection
+ *
  * Generates complete Python script including:
- * - eztool() function for inter-tool communication
- * - ezMain() entry point wrapper
- * - Parameter injection
- * - Protocol implementation
- * - Safe imports
+ *  - eztool() function for inter-tool communication
+ *  - ezLog() function for structured contextual logging
+ *  - ezMain() entry point wrapper
+ *  - Parameter injection
+ *  - Protocol implementation
+ *  - Safe imports
  */
 @Slf4j
 @Component
@@ -31,7 +33,7 @@ public class PythonScriptBuilder {
     }
 
     /**
-     * Build complete Python script with eztool support
+     * Build complete Python script with eztool + ezLog support
      *
      * @param context Execution context
      * @param tool    The tool to execute
@@ -50,16 +52,22 @@ public class PythonScriptBuilder {
         // 2. Add safe imports
         script.append(buildImports());
 
-        // 3. Add eztool function
+        // 3. Inject runtime context (__ez_context__)
+        script.append(buildContextInjection(context, tool));
+
+        // 4. Add ezLog() function
+        script.append(buildEzLogFunction());
+
+        // 5. Add eztool() function
         script.append(buildEzToolFunction());
 
-        // 4. Inject parameters as global variables
+        // 6. Inject parameters as global variables
         script.append(buildParameterInjection(params));
 
-        // 5. Add user's code wrapped in ezMain
+        // 7. Add user's code wrapped in ezMain
         script.append(buildUserCode(tool.getPythonCode()));
 
-        // 6. Add main execution block
+        // 8. Add main execution block
         script.append(buildMainExecution());
 
         log.debug("[executionId={}] Built Python script ({} bytes)",
@@ -78,19 +86,67 @@ public class PythonScriptBuilder {
         imports.append("import sys\n");
         imports.append("import json\n");
         imports.append("import uuid\n");
+        imports.append("import datetime\n");
 
-        // Add configured allowed modules
         for (String module : config.getPython().getAllowedModules()) {
             imports.append("import ").append(module).append("\n");
         }
-
         imports.append("\n");
 
         return imports.toString();
     }
 
     /**
-     * Build eztool function for inter-tool communication
+     * Inject execution context (__ez_context__)
+     */
+    private String buildContextInjection(ExecutionContext context, ToolModel.Tool tool) {
+        try {
+            String contextJson = jsonMapper.writeValueAsString(Map.of(
+                    "requestId", MDC.get("requestId"),
+                    "executionId", context.getExecutionId(),
+                    "toolId", tool.getFuncNameKey()
+            ));
+
+            return "# === Execution Context ===\n" +
+                    "__ez_context__ = json.loads('" + escapePythonString(contextJson) + "')\n\n";
+        } catch (Exception e) {
+            log.error("Failed to build context JSON", e);
+            return "__ez_context__ = {}\n\n";
+        }
+    }
+
+    /**
+     * Build ezLog() helper for structured contextual logging
+     */
+    private String buildEzLogFunction() {
+        return """
+                # === EzLog Function ===
+                def ezLog(message, data=None, level="info"):
+                    try:
+                        log_entry = {
+                            "type": "log",
+                            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                            "context": __ez_context__,
+                            "level": level,
+                            "message": str(message),
+                            "data": data
+                        }
+                        sys.stdout.write(json.dumps(log_entry, default=str, ensure_ascii=False) + "\\n")
+                        sys.stdout.flush()
+                    except Exception as e:
+                        sys.stdout.write(json.dumps({
+                            "type": "log",
+                            "level": "error",
+                            "message": f"ezLog failed: {str(e)}",
+                            "data": None
+                        }) + "\\n")
+                        sys.stdout.flush()
+                        
+                """;
+    }
+
+    /**
+     * Build eztool() function for inter-tool communication
      */
     private String buildEzToolFunction() {
         String requestMarker = config.getPython().getProtocol().getRequestMarker();
@@ -103,63 +159,38 @@ public class PythonScriptBuilder {
                 def eztool(tool_id, params=None):
                     \"\"\"
                     Call another tool from Python
-                
-                    Args:
-                        tool_id (str): The ID of the tool to call
-                        params (dict, optional): Parameters to pass to the tool
-                
-                    Returns:
-                        dict: Result from the tool execution
-                
-                    Raises:
-                        RuntimeError: If tool execution fails
                     \"\"\"
                     if params is None:
                         params = {}
-                
-                    # Generate unique call ID
                     call_id = str(uuid.uuid4())
-                
-                    # Create request message
                     request = {
                         "type": "TOOL_CALL",
                         "toolId": tool_id,
                         "params": params,
                         "callId": call_id
                     }
-                
-                    # Send request to Java via stdout
                     print("%s", flush=True)
                     print(json.dumps(request), flush=True)
                     print("%s", flush=True)
-                
-                    # Wait for response from Java via stdin
                     try:
                         response_marker = sys.stdin.readline().strip()
                         if response_marker != "%s":
                             raise RuntimeError(f"Protocol error: expected response marker, got: {response_marker}")
-                
                         response_json = sys.stdin.readline().strip()
-                
                         end_marker = sys.stdin.readline().strip()
                         if end_marker != "%s":
                             raise RuntimeError(f"Protocol error: expected end marker, got: {end_marker}")
-                
-                        # Parse response
                         response = json.loads(response_json)
-                
                         if response.get("success"):
                             return response.get("data")
                         else:
                             error_msg = response.get("error", "Unknown error")
                             error_code = response.get("errorCode", "UNKNOWN")
                             raise RuntimeError(f"Tool '{tool_id}' failed [{error_code}]: {error_msg}")
-                
                     except json.JSONDecodeError as e:
                         raise RuntimeError(f"Failed to parse response from tool '{tool_id}': {e}")
                     except Exception as e:
                         raise RuntimeError(f"Error calling tool '{tool_id}': {e}")
-                
                 """, requestMarker, requestEndMarker, responseMarker, responseEndMarker);
     }
 
@@ -186,7 +217,6 @@ public class PythonScriptBuilder {
                 log.warn("Skipping parameter with invalid Python identifier: {}", key);
             }
         }
-
         injection.append("\n");
 
         return injection.toString();
@@ -197,30 +227,18 @@ public class PythonScriptBuilder {
      */
     private String buildUserCode(String userCode) {
         StringBuilder code = new StringBuilder();
-
         code.append("# === User Code ===\n");
 
-        // Check if user already defined ezMain
         if (userCode.contains("def ezMain(")) {
-            // User provided ezMain - use as is
-            code.append(userCode);
-            code.append("\n\n");
+            code.append(userCode).append("\n\n");
         } else {
-            // Wrap user code in ezMain
-            code.append("def ezMain(data):\n");
-            code.append("    \"\"\"\n");
-            code.append("    User-defined tool logic\n");
-            code.append("    \"\"\"\n");
-
-            // Indent user code
-            String[] lines = userCode.split("\n");
-            for (String line : lines) {
+            code.append("def ezMain(data):\n")
+                    .append("    \"\"\"User-defined tool logic\"\"\"\n");
+            for (String line : userCode.split("\n")) {
                 code.append("    ").append(line).append("\n");
             }
-
             code.append("\n");
         }
-
         return code.toString();
     }
 
@@ -229,26 +247,21 @@ public class PythonScriptBuilder {
      */
     private String buildMainExecution() {
         String resultMarker = config.getPython().getProtocol().getResultMarker();
-
         return String.format("""
                 # === Main Execution ===
                 if __name__ == "__main__":
                     try:
-                        # Prepare data dict from injected parameters
                         data = {}
                         for var_name, var_value in list(globals().items()):
-                            if not var_name.startswith('_') and var_name not in ['sys', 'json', 'uuid', 'math', 'datetime', 're', 'statistics', 'eztool', 'ezMain', 'data']:
+                            if not var_name.startswith('_') and var_name not in ['sys', 'json', 'uuid', 'datetime', 'math', 're', 'statistics', 'eztool', 'ezMain', 'data']:
                                 data[var_name] = var_value
-                
-                        # Execute user code
+                        ezLog("Starting execution", data)
                         result = ezMain(data)
-                
-                        # Output result with marker
+                        ezLog("Execution completed", result)
                         print("%s", flush=True)
                         print(json.dumps({"success": True, "data": result}), flush=True)
-                
                     except Exception as e:
-                        # Output error with marker
+                        ezLog("Execution failed", {"error": str(e), "type": type(e).__name__}, "error")
                         print("%s", flush=True)
                         print(json.dumps({"success": False, "error": str(e), "type": type(e).__name__}), flush=True)
                         sys.exit(1)
@@ -256,41 +269,19 @@ public class PythonScriptBuilder {
     }
 
     /**
-     * Check if string is valid Python identifier
+     * Validate Python identifiers
      */
     private boolean isValidPythonIdentifier(String name) {
-        if (name == null || name.isEmpty()) {
-            return false;
-        }
-
-        // Must start with letter or underscore
-        if (!Character.isLetter(name.charAt(0)) && name.charAt(0) != '_') {
-            return false;
-        }
-
-        // Rest must be letters, digits, or underscores
+        if (name == null || name.isEmpty()) return false;
+        if (!Character.isLetter(name.charAt(0)) && name.charAt(0) != '_') return false;
         for (int i = 1; i < name.length(); i++) {
             char c = name.charAt(i);
-            if (!Character.isLetterOrDigit(c) && c != '_') {
-                return false;
-            }
+            if (!Character.isLetterOrDigit(c) && c != '_') return false;
         }
-
-        // Check against Python keywords
-        String[] pythonKeywords = {
-                "False", "None", "True", "and", "as", "assert", "async", "await",
-                "break", "class", "continue", "def", "del", "elif", "else", "except",
-                "finally", "for", "from", "global", "if", "import", "in", "is",
-                "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
-                "try", "while", "with", "yield"
-        };
-
-        for (String keyword : pythonKeywords) {
-            if (name.equals(keyword)) {
-                return false;
-            }
-        }
-
+        String[] keywords = {"False","None","True","and","as","assert","async","await","break","class",
+                "continue","def","del","elif","else","except","finally","for","from","global","if","import",
+                "in","is","lambda","nonlocal","not","or","pass","raise","return","try","while","with","yield"};
+        for (String kw : keywords) if (name.equals(kw)) return false;
         return true;
     }
 
@@ -298,23 +289,16 @@ public class PythonScriptBuilder {
      * Convert Java value to Python literal
      */
     private String convertToPythonLiteral(Object value) {
-        if (value == null) {
+        if (value == null) return "None";
+        if (value instanceof String) return "\"" + escapePythonString((String) value) + "\"";
+        if (value instanceof Number) return value.toString();
+        if (value instanceof Boolean) return ((Boolean) value) ? "True" : "False";
+        try {
+            String json = jsonMapper.writeValueAsString(value);
+            return "json.loads('" + escapePythonString(json) + "')";
+        } catch (Exception e) {
+            log.error("Error converting to Python literal", e);
             return "None";
-        } else if (value instanceof String) {
-            return "\"" + escapePythonString((String) value) + "\"";
-        } else if (value instanceof Number) {
-            return value.toString();
-        } else if (value instanceof Boolean) {
-            return (Boolean) value ? "True" : "False";
-        } else {
-            // Complex types - convert to JSON
-            try {
-                String json = jsonMapper.writeValueAsString(value);
-                return "json.loads('" + escapePythonString(json) + "')";
-            } catch (Exception e) {
-                log.error("Error converting value to Python literal", e);
-                return "None";
-            }
         }
     }
 
