@@ -44,7 +44,7 @@ public class PythonJavaScriptToolExecutor {
     private ToolExecutionService toolExecutionService; // circular dependency setter
 
     private static final long DEFAULT_TIMEOUT_MS = 30000;
-    private static final String TEMP_DIR = System.getProperty("java.io.tmpdir") + "/chatbot-scripts/";
+    private static final String TEMP_DIR = System.getProperty("java.io.tmpdir") + "chatbot-scripts/";
 
     private static final List<String> DANGEROUS_PYTHON_PATTERNS = Arrays.asList(
             "import os", "import subprocess", "import sys",
@@ -97,7 +97,7 @@ public class PythonJavaScriptToolExecutor {
             ToolModel.Tool tool,
             Map<String, Object> params) throws Exception {
 
-        String requestId = MDC.get("requestId");
+        String requestId = context.getRequestId();
         log.info("[requestId={}] [executionId={}] Executing Python tool: {}",
                 requestId, context.getExecutionId(), tool.getFuncNameKey());
 
@@ -171,7 +171,7 @@ public class PythonJavaScriptToolExecutor {
             ToolModel.Tool tool,
             Map<String, Object> params) throws Exception {
 
-        String requestId = MDC.get("requestId");
+        String requestId = context.getRequestId();
         log.info("[requestId={}] [executionId={}] Executing JavaScript tool: {}",
                 requestId, context.getExecutionId(), tool.getFuncNameKey());
 

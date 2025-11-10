@@ -4,12 +4,14 @@ import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.model.ExecutionMetadata;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -55,8 +57,16 @@ public class ExecutionContextFactory {
      * @return New ExecutionContext
      */
     public ExecutionContext create(Long chatbotId, String userId) {
-        ExecutionContext context = new ExecutionContext(chatbotId, userId, config);
-        
+        // Capture requestId from MDC when creating context
+        String requestId = MDC.get("requestId");
+        if (requestId == null) {
+            requestId = UUID.randomUUID().toString();
+            log.debug("No requestId in MDC, generated new one: {}", requestId);
+        }
+
+        ExecutionContext context = new ExecutionContext(chatbotId, userId, requestId, config);
+
+
         // Track it
         activeContexts.put(context.getExecutionId(), context);
         
