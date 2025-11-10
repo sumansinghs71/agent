@@ -102,7 +102,7 @@ public class PythonScriptBuilder {
     private String buildContextInjection(ExecutionContext context, ToolModel.Tool tool) {
         try {
             String contextJson = jsonMapper.writeValueAsString(Map.of(
-                    "requestId", MDC.get("requestId"),
+                    "requestId", context.getRequestId(),
                     "executionId", context.getExecutionId(),
                     "toolId", tool.getFuncNameKey()
             ));
