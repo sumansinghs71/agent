@@ -27,6 +27,7 @@ public class ExecutionContext implements AutoCloseable {
     private final String executionId;
     private final Long chatbotId;
     private final String userId;
+    private final String requestId;
     private final LocalDateTime createdAt;
     
     // Call chain tracking
@@ -61,7 +62,8 @@ public class ExecutionContext implements AutoCloseable {
      * @param userId User making the request
      * @param config Configuration properties
      */
-    public ExecutionContext(Long chatbotId, String userId, ToolExecutionProperties config) {
+    public ExecutionContext(Long chatbotId, String userId, String requestId, ToolExecutionProperties config) {
+        this.requestId = requestId;
         this.executionId = UUID.randomUUID().toString();
         this.chatbotId = chatbotId;
         this.userId = userId;
@@ -103,7 +105,7 @@ public class ExecutionContext implements AutoCloseable {
         lock.lock();
         try {
             checkNotClosed();
-            checkTimeout();
+            //checkTimeout();
             
             // Check max total calls
             totalToolCalls++;
@@ -128,12 +130,17 @@ public class ExecutionContext implements AutoCloseable {
             
             // Check circular dependency
             if (config.getInterToolCommunication().isCircularDependencyCheck() && calledTools.contains(toolId)) {
-                throw new CircularDependencyException(
-                    String.format("Circular dependency detected: '%s' already in call chain: %s", 
-                        toolId, getCallChainString()),
-                    toolId,
-                    getCallChainList()
-                );
+                boolean isAlreadyOnStack = callStack.stream()
+                        .anyMatch(call -> call.getToolId().equals(toolId));
+
+                if (isAlreadyOnStack) {
+                    throw new CircularDependencyException(
+                            String.format("Circular dependency detected: '%s' already in call chain: %s",
+                                    toolId, getCallChainString()),
+                            toolId,
+                            getCallChainList()
+                    );
+                }
             }
             
             // Register the call
@@ -172,7 +179,9 @@ public class ExecutionContext implements AutoCloseable {
             
             // Mark as completed
             removed.complete(System.currentTimeMillis());
-            
+
+            calledTools.remove(toolId);
+
             long duration = removed.getDurationMs();
             log.debug("[executionId={}] Tool '{}' unregistered. Duration: {}ms, Remaining depth: {}", 
                     executionId, toolId, duration, callStack.size());
@@ -480,6 +489,7 @@ public class ExecutionContext implements AutoCloseable {
     public String getExecutionId() { return executionId; }
     public Long getChatbotId() { return chatbotId; }
     public String getUserId() { return userId; }
+    public String getRequestId() { return requestId; }
     public int getTotalToolCalls() { return totalToolCalls; }
     public ExecutionMetadata.ExecutionState getState() { return state; }
     public boolean isClosed() { return closed; }

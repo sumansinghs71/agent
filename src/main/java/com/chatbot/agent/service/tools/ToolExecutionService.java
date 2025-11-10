@@ -1,5 +1,6 @@
 package com.chatbot.agent.service.tools;
 
+import com.chatbot.agent.config.DynamicDataSourceConfig;
 import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.exception.*;
 import com.chatbot.agent.model.*;
@@ -16,13 +17,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * ToolExecutionService - Updated with ExecutionContext support
- *
+ * <p>
  * CHANGES FROM ORIGINAL:
  * - Added ExecutionContext management
  * - Added ToolRegistryService for caching
@@ -43,6 +45,7 @@ public class ToolExecutionService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final ToolExecutionProperties config;
+    private final DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager;
 
     public ToolExecutionService(
             ExecutionContextFactory contextFactory,
@@ -53,7 +56,8 @@ public class ToolExecutionService {
             GuardrailLogService guardrailLogService,
             RestTemplate restTemplate,
             ObjectMapper objectMapper,
-            ToolExecutionProperties config) {
+            ToolExecutionProperties config,
+            DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager) {
 
         this.contextFactory = contextFactory;
         this.toolRegistry = toolRegistry;
@@ -64,6 +68,7 @@ public class ToolExecutionService {
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
         this.config = config;
+        this.dataSourceManager = dataSourceManager;
 
         // CRITICAL: Set service in executor to avoid circular dependency
         pyJsExecutor.setToolExecutionService(this);
@@ -75,8 +80,8 @@ public class ToolExecutionService {
      * Main entry point - creates ExecutionContext
      *
      * @param chatbotId The chatbot ID
-     * @param userId User making the request
-     * @param request Tool execution request
+     * @param userId    User making the request
+     * @param request   Tool execution request
      * @return Execution result
      */
     public ToolExecutionResult executeTool(Long chatbotId, String userId, ToolModel.ToolExecutionRequest request) {
@@ -218,6 +223,7 @@ public class ToolExecutionService {
                     context.getCallChainList().get(context.getCallChainList().size() - 1).equals(toolId)) {
                 // Only unregister if this tool is still on top of stack (not already unregistered due to error)
                 // This is already handled by catch block above, so we don't double-unregister
+                context.unregisterToolCall(toolId);
             }
         }
     }
@@ -227,8 +233,8 @@ public class ToolExecutionService {
      * This is called when a tool wants to call another tool
      *
      * @param context Current execution context
-     * @param toolId Tool to call
-     * @param params Parameters
+     * @param toolId  Tool to call
+     * @param params  Parameters
      * @return Result data
      */
     public Object handleEzToolCall(ExecutionContext context, String toolId, Map<String, Object> params) throws Exception {
@@ -278,8 +284,6 @@ public class ToolExecutionService {
 
         log.info("[executionId={}] SQL validation passed", executionId);
 
-        // Your existing SQL execution code here...
-        // (Keep your existing implementation)
 
         return executeSqlToolOriginal(tool, params, context.getChatbotId());
     }
@@ -308,7 +312,6 @@ public class ToolExecutionService {
 
         log.info("[executionId={}] URL validation passed", executionId);
 
-        // Your existing REST execution code here...
         return executeRestToolOriginal(tool, params);
     }
 
@@ -335,33 +338,134 @@ public class ToolExecutionService {
         return new ArrayList<>(toolRegistry.getAllTools(chatbotId).values());
     }
 
-    // ==================================================================================
-    //                        KEEP YOUR EXISTING METHODS
-    // ==================================================================================
-
     /**
-     * Your existing SQL execution (keep as-is, just rename)
+     *  SQL execution
      */
     private Object executeSqlToolOriginal(ToolModel.Tool tool, Map<String, Object> params, Long chatbotId) {
-        // Your existing SQL execution code
-        // Copy from your current ToolExecutionService
-        return null; // Replace with your implementation
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] SqlTool Originall: {} (Chat Id: {})", requestId, tool.getId(), chatbotId);
+        try (Connection conn = dataSourceManager.getConnection(tool.getDataSource())) {
+            JdbcTemplate jdbcTemplate = new JdbcTemplate(
+                    new SingleConnectionDataSource(conn, true));
+
+            String sql = tool.getSqlQuery();
+            List<Object> paramValues = new ArrayList<>();
+
+            /*
+             Pattern explanation (Java string literal):
+             - Matches any of:
+               1) double-quoted template:   "{{$name}}"
+               2) single-quoted template:   '{{$name}}'
+               3) unquoted template:        {{$name}}
+               4) colon-style parameter:    :name
+
+             Capturing groups:
+             group(1) => name inside double-quoted {{$...}}
+             group(2) => name inside single-quoted {{$...}}
+             group(3) => name inside unquoted {{$...}}
+             group(4) => name for :name
+             We'll pick the first non-null group to obtain the parameter name.
+            */
+            Pattern pattern = Pattern.compile(
+                    "\"\\{\\{\\$([A-Za-z0-9_]+)\\}\\}\""        // "{{$name}}"
+                            + "|'\\{\\{\\$([A-Za-z0-9_]+)\\}\\}'" // '{{$name}}'
+                            + "|\\{\\{\\$([A-Za-z0-9_]+)\\}\\}"   // {{$name}}
+                            + "|:([A-Za-z0-9_]+)"                 // :name
+            );
+
+            Matcher matcher = pattern.matcher(sql);
+            StringBuffer sb = new StringBuffer();
+
+            while (matcher.find()) {
+                String paramName = null;
+                if (matcher.group(1) != null) paramName = matcher.group(1);
+                else if (matcher.group(2) != null) paramName = matcher.group(2);
+                else if (matcher.group(3) != null) paramName = matcher.group(3);
+                else if (matcher.group(4) != null) paramName = matcher.group(4);
+
+                if (paramName == null) {
+                    // Shouldn't happen, defensive check
+                    throw new IllegalStateException("Matched parameter but could not determine name");
+                }
+
+                if (!params.containsKey(paramName)) {
+                    throw new IllegalArgumentException("Missing parameter: " + paramName);
+                }
+
+                // Append replacement with a single JDBC placeholder.
+                // Use Matcher.appendReplacement to preserve other parts of the SQL.
+                matcher.appendReplacement(sb, "?");
+
+                // Add the parameter value in the same order as placeholders.
+                paramValues.add(params.get(paramName));
+            }
+            matcher.appendTail(sb);
+
+            String finalSql = sb.toString();
+            log.debug("[requestId={}] Final SQL: {}", requestId, finalSql);
+            log.debug("[requestId={}] Param values: {}", requestId, paramValues);
+
+            List<Map<String, Object>> result = jdbcTemplate.queryForList(
+                    finalSql, paramValues.toArray());
+
+            log.info("[requestId={}] SQL returned {} rows", requestId, result.size());
+            return result;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
-     * Your existing REST execution (keep as-is, just rename)
+     * REST execution
      */
     private Object executeRestToolOriginal(ToolModel.Tool tool, Map<String, Object> params) {
-        // Your existing REST execution code
-        // Copy from your current ToolExecutionService
-        return null; // Replace with your implementation
+
+        String requestId = MDC.get("requestId");
+        log.info("[requestId={}] Rest Tool Original : {} (Params: {})", requestId, tool.getId(), params);
+
+        String url = replacePlaceholders(tool.getHttpPath(), params);
+        HttpHeaders headers = new HttpHeaders();
+        if (tool.getHttpHeaders() != null) {
+            for (Map.Entry<String, String> entry : tool.getHttpHeaders().entrySet()) {
+                String value = replacePlaceholders(entry.getValue(), params);
+                headers.add(entry.getKey(), value);
+            }
+        }
+
+        String body = null;
+        if (tool.getHttpBody() != null && !tool.getHttpBody().isEmpty()) {
+            body = replacePlaceholders(tool.getHttpBody(), params);
+        }
+
+        HttpEntity<String> entity = new HttpEntity<>(body, headers);
+
+        try {
+            log.info("[requestId={}] Rest Template URL: {} (Headers: {}) (Body: {})",
+                    requestId, url, headers, body);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.valueOf(tool.getHttpMethod()), entity, String.class);
+
+            if (response.getBody() != null && !response.getBody().isEmpty()) {
+                try {
+                    return objectMapper.readValue(response.getBody(), Object.class);
+                } catch (Exception e) {
+                    return response.getBody();
+                }
+            }
+            return Map.of("status", response.getStatusCode().value());
+        } catch (Exception e) {
+            throw new RuntimeException("REST API call failed: " + e.getMessage(), e);
+        }
     }
 
     /**
-     * Your existing parameter validation (keep as-is)
+     *  parameter validation
      */
     private Map<String, Object> validateAndPrepareParameters(ToolModel.Tool tool, Map<String, Object> providedParams) {
-        // Your existing parameter validation code
         Map<String, Object> params = new HashMap<>();
         if (providedParams != null) params.putAll(providedParams);
         if (tool.getParams() == null) return params;
@@ -382,10 +486,9 @@ public class ToolExecutionService {
     }
 
     /**
-     * Your existing placeholder replacement (keep as-is)
+     * placeholder
      */
     private String replacePlaceholders(String template, Map<String, Object> params) {
-        // Your existing placeholder replacement code
         if (template == null) return null;
 
         String result = template;

@@ -50,7 +50,8 @@ public class ToolExecutionConfig {
             com.chatbot.agent.service.guardrails.GuardrailLogService guardrailLogService,
             org.springframework.web.client.RestTemplate restTemplate,
             ObjectMapper objectMapper,
-            ToolExecutionProperties config) {
+            ToolExecutionProperties config,
+            DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager) {
 
         ToolExecutionService service = new ToolExecutionService(
                 contextFactory,
@@ -61,7 +62,8 @@ public class ToolExecutionConfig {
                 guardrailLogService,
                 restTemplate,
                 objectMapper,
-                config
+                config,
+                dataSourceManager
         );
 
         // CRITICAL: Complete circular dependency

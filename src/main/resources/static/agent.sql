@@ -50,11 +50,10 @@ CREATE TABLE IF NOT EXISTS chat_message (
 select * from document
 
 SELECT * FROM chatbot;
-
+select * from tool
 select * from tool where chatbot_id=2;
 
 SELECT * FROM tool WHERE chatbot_id = 2 AND func_name_key = 'getUserById';
-
 
 -- Tool definition table
 CREATE TABLE tool (
@@ -138,7 +137,12 @@ CREATE INDEX idx_citation_chatbot ON citation_log(chatbot_id, created_at);
 
 select * from chatbot;
 select * from tool where chatbot_id=2 and function_type='PYTHON';
-select count(*) from tool;
+
+[{"required": true, "paramType": "number", "defaultValue": null, "paramNameKey": "years", "paramDescription": "Number of years"}]
+[{"required": true, "paramType": "string", "defaultValue": null, "paramNameKey": "numbers", "paramDescription": "Comma-separated list of numbers (e.g., 10,20,30,40,50)"}]
+
+SELECT employee_id, CONCAT(first_name, " ", last_name) as full_name, department, position, hire_date, DATEDIFF(CURDATE(), hire_date) as days_employed FROM employees WHERE YEAR(hire_date) = {{$year}} ORDER BY hire_date DESC
+select * from tool;
 
 ALTER TABLE tool_execution_log 
 ADD COLUMN execution_id VARCHAR(255),
