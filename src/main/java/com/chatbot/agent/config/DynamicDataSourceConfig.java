@@ -24,8 +24,17 @@ public class DynamicDataSourceConfig {
     private Properties datasourceProperties;
 
     @Bean
-    public DynamicDataSourceManager dynamicDataSourceManager() throws IOException {
-        loadDatasourceProperties();
+    public DynamicDataSourceManager dynamicDataSourceManager() {
+        try {
+            loadDatasourceProperties();
+        } catch (IOException e) {
+            // Fail fast with an unchecked exception that gives a clear startup error
+            throw new IllegalStateException(
+                    "Failed to load datasource properties from classpath:static/datasource.properties. " +
+                            "Please ensure the file exists and is readable.",
+                    e
+            );
+        }
         return new DynamicDataSourceManager(datasourceProperties, dataSourceCache);
     }
 

@@ -1,42 +1,143 @@
-  server:
-    port: 8080
+server:
+  port: 8080
 
-  spring:
-    datasource:
-      url: jdbc:mysql://localhost:3306/chatbot_db?useSSL=false&allowPublicKeyRetrieval=true
-      username: root
-      password: ${BS2_DB_PASSWORD}
-      driver-class-name: com.mysql.cj.jdbc.Driver
-      initialization-mode: always
-      platform: mysql
-      sql-script-encoding: UTF-8
-    servlet:
-      multipart:
-        max-file-size: 50MB
-        max-request-size: 50MB
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/chatbot_db?useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    initialization-mode: always
+    platform: mysql
+    sql-script-encoding: UTF-8
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+      enabled: true
+      file-size-threshold: 2MB
+
+azure:
+  openai:
+    base-url: https://chatbot-openai-sst.openai.azure.com
+    api-key: ${AZURE_OPENAI_API_KEY}
+    deployment-name: gpt-35-turbo
+    api-version: 2021-04-30
+    search-endpoint: https://chatbot-search-sst.search.windows.net
+    search-key: ${AZURE_OPENAI_KEY}
+    search-index: chatbot-indexx
+
+llama:
+  base-url: http://127.0.0.1:11434
+  embedding-model: nomic-embed-text
+  generation-model: llama2
+  vector-db:
+    url: jdbc:postgresql://localhost:5432/vector_store
+    username: ${PG_USERNAME}
+    password: ${DB_PASSWORD}
+
+document:
+  upload-dir: /Users/sumansingh/Downloads/Docs/
+  chunk-size: 1000
+  chunk-overlap: 200
+
+tool-execution:
+  inter-tool-communication:
+    enabled: true
+    max-chain-depth: 5
+    aggregate-timeout-seconds: 60
+    circular-dependency-check: true
+
+  python:
+    executor-type: STDIN_STDOUT_PROTOCOL
+    interpreter-path: "python3"
+    interpreter-args:
+      - "--isolated"
+    max-code-size-bytes: 100000
+    allowed-modules:
+      - json
+      - math
+      - datetime
+      - re
+      - statistics
+    protocol:
+      request-marker: "###EZTOOL_REQUEST###"
+      request-end-marker: "###EZTOOL_REQUEST_END###"
+      response-marker: "###EZTOOL_RESPONSE###"
+      response-end-marker: "###EZTOOL_RESPONSE_END###"
+      result-marker: "###RESULT###"
+      buffer-size: 8192
+      read-timeout-ms: 5000
+      max-message-size: 10000000
+
+  javascript:
+    executor-type: GRAALVM_BINDING
+    max-code-size-bytes: 100000
+    allow-console-log: false
+    engine-version: "22.3.0"
+
+  tool-registry:
+    cache-enabled: true
+    cache-ttl-seconds: 300
+    preload-on-startup: true
+    max-cache-size: 1000
+
+  security:
+    validate-every-call: true
+    log-all-executions: true
+    max-tool-calls-per-request: 20
+    block-dangerous-patterns: true
+    enforce-guardrails: true
+
+  timeout:
+    individual-tool-timeout-ms: 30000
+    aggregate-enabled: true
+    aggregate-timeout-ms: 60000
+    timeout-strategy: AGGREGATE
+    process-wait-timeout-ms: 5000
+
+  error-handling:
+    propagate-errors: true
+    include-stack-trace: false
+    include-tool-chain: true
+    include-execution-context: true
+    max-error-message-length: 1000
+
+  performance:
+    enable-parallel-execution: false
+    thread-pool-size: 10
+    thread-pool-queue-size: 100
+    thread-keep-alive-seconds: 60
+    max-memory-per-chain-bytes: 512000000
+
+  monitoring:
+    log-execution-chain: true
+    log-timing-details: true
+    alert-on-timeout: true
+    alert-on-circular-dependency: true
+    alert-on-memory-exhaustion: true
+    leak-detection-interval-seconds: 60
+    leak-detection-threshold-ms: 300000
+    enable-metrics: true
+    enable-health-checks: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,info
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
         enabled: true
-        file-size-threshold: 2MB
 
-  azure:
-    openai:
-      base-url: https://chatbot-openai-sst.openai.azure.com
-      api-key:
-      deployment-name: gpt-35-turbo
-      api-version: 2021-04-30
-      search-endpoint: https://chatbot-search-sst.search.windows.net
-      search-key:
-      search-index: chatbot-indexx
-
-  llama:
-    base-url: http://127.0.0.1:11434
-    embedding-model: nomic-embed-text  # Add this line
-    generation-model: llama2
-    vector-db:
-      url: jdbc:postgresql://localhost:5432/vector_store
-      username:
-      password:
-
-  document:
-    upload-dir: /Users/sumansingh/Downloads/Docs/
-    chunk-size: 1000
-    chunk-overlap: 200
+logging:
+  level:
+    com.chatbot.agent.service.tools: INFO
+    com.chatbot.agent.health: INFO
+    com.chatbot.agent.metrics: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
