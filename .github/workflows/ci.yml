@@ -42,16 +42,26 @@ jobs:
 
       # The durable-runtime and sandbox suites are @EnabledIf(dockerAvailable) and would SKIP
       # silently on a runner without a daemon, reporting green while verifying nothing.
+      #
+      # Counted by summing across reports whose name starts with the suite: JUnit writes a separate
+      # report per @Nested class, and the outer class legitimately reports "Tests run: 0" when all
+      # of its tests live in nested classes. Matching the outer report alone gives a false failure.
       - name: Fail if the container-backed suites did not actually run
         run: |
-          for suite in \
-            com.chatbot.agent.runtime.persistence.DurableRuntimeTest \
-            com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest ; do
-            report="target/surefire-reports/${suite}.txt"
-            test -f "$report" || { echo "MISSING: $suite did not run"; exit 1; }
-            grep -q "Tests run: 0" "$report" && { echo "SKIPPED: $suite ran zero tests"; cat "$report"; exit 1; }
-            echo "ok: $suite"
-          done
+          check_suite() {
+            prefix="target/surefire-reports/$1"
+            total=$(cat "$prefix"*.txt 2>/dev/null \
+                    | grep -o 'Tests run: [0-9]*' | grep -o '[0-9]*' \
+                    | awk '{s+=$1} END {print s+0}')
+            if [ "$total" -lt "$2" ]; then
+              echo "FAIL: $1 ran $total tests, expected at least $2 (skipped or missing)"
+              cat "$prefix"*.txt 2>/dev/null | head -20
+              return 1
+            fi
+            echo "ok: $1 ran $total tests"
+          }
+          check_suite com.chatbot.agent.runtime.persistence.DurableRuntimeTest 15
+          check_suite com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest 12
 
       - name: Coverage report
         run: ./mvnw -B -ntp jacoco:report
