@@ -118,7 +118,7 @@
         <dependency>
             <groupId>org.graalvm.js</groupId>
             <artifactId>js-scriptengine</artifactId>
-            <version>22.3.0</version>
+            <version>25.3.4.1</version>
         </dependency>
         <!-- OpenTelemetry. Spans carry the high-cardinality identifiers (runId, nodeId, toolId)
              that must never become metric labels; metrics stay low-cardinality and the trace
