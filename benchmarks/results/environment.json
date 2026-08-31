@@ -1,0 +1,14 @@
+{
+  "date": "2026-08-31T15:12:14Z",
+  "commit": "07a9d809a6a9e916377ed36411ffb864e1912597",
+  "branch": "DAG",
+  "machine": "Mac14,7",
+  "cpu": "Apple M2",
+  "cores": "8",
+  "ram_bytes": "17179869184",
+  "os": "Darwin 24.3.0 arm64",
+  "jdk": "java version 21.0.11 2026-04-21 LTS",
+  "docker": "Docker version 20.10.21, build baeda1f",
+  "postgres_image": "postgres:16-alpine",
+  "note": "Local reproducible benchmark results on a single developer machine. NOT a production capacity measurement."
+}

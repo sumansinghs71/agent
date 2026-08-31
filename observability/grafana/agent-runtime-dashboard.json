@@ -1,0 +1,299 @@
+{
+  "title": "Agent Runtime Lab",
+  "uid": "agent-runtime-lab",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "description": "Runtime health. Panels are chosen to answer 'is it working, and if not which layer is at fault' - not to fill a screen.",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Run outcomes",
+      "type": "timeseries",
+      "description": "Success and failure by terminal status.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_run_completed_total[5m])) by (outcome)",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Run latency p95",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agent_node_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(agent_node_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Scheduler saturation",
+      "type": "timeseries",
+      "description": "Queue growth without active growth means the pool is the bottleneck.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "agent_scheduler_active",
+          "legendFormat": "active",
+          "refId": "A"
+        },
+        {
+          "expr": "agent_scheduler_queue",
+          "legendFormat": "queued",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Retry rate by failure class",
+      "type": "timeseries",
+      "description": "A rising AMBIGUOUS rate is the one to worry about: those retries are guesses unless a key exists.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_node_retry_total[5m])) by (error_class)",
+          "legendFormat": "{{error_class}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Failure layer distribution",
+      "type": "timeseries",
+      "description": "Separates a model problem from a runtime, tool or environment problem. Rising UNKNOWN means attribution itself is failing.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_failures_total[5m])) by (layer)",
+          "legendFormat": "{{layer}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tool policy denials",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(tool_policy_decision_total{outcome=\"deny\"}[5m])) by (reason)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Sandbox queue and rejections",
+      "type": "timeseries",
+      "description": "Rejections mean admission control is shedding load - by design, but worth knowing.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "tool_sandbox_active",
+          "legendFormat": "active",
+          "refId": "A"
+        },
+        {
+          "expr": "tool_sandbox_waiting",
+          "legendFormat": "waiting",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tool_sandbox_rejected_total[5m]))",
+          "legendFormat": "rejected/s",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Approval waits",
+      "type": "timeseries",
+      "description": "Expiries rising relative to approvals means nobody is answering.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(approval_requested_total[5m]))",
+          "legendFormat": "requested",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(approval_approved_total[5m]))",
+          "legendFormat": "approved",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(approval_expired_total[5m]))",
+          "legendFormat": "expired",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "MCP health",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(mcp_tool_invocation_total[5m])) by (outcome)",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Eval regression status",
+      "type": "stat",
+      "description": "Populated by the eval suite in CI. Non-zero failures is a regression gate.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "eval_scenarios_total - eval_failures_total",
+          "legendFormat": "passing",
+          "refId": "A"
+        },
+        {
+          "expr": "eval_failures_total",
+          "legendFormat": "failing",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}

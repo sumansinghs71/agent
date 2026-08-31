@@ -93,12 +93,33 @@ no suite.
 | A fan-in node runs once despite an upstream retry | effect count | same | same | **1 effect** |
 | The eval harness itself detects defects | negative controls | same | `EvalSuiteTest` NEG-01/NEG-02 | **both fail as required** |
 
+## Observability and performance
+
+| Claim | Metric | Command | Artifact | Observed |
+|---|---|---|---|---|
+| Credentials are redacted before logging | masked fields | `./mvnw test -Dtest=LogRedactorTest` | `LogRedactorTest` | **30/30**, incl. a negative control against over-redaction |
+| Docker sandbox cold start | p50 / p95 | `./mvnw test -Dtest=SandboxColdStartBenchmark` | `benchmarks/results/integration-benchmarks.jsonl` | **272 ms / 517 ms** (n=13) |
+| JavaScript context startup | p50 / p95 | same | same | **9 ms / 17 ms** (n=30) |
+| Tool registry lookup | avg | JMH `RuntimeBenchmark` | `benchmarks/results/jmh-results.json` | **0.006 µs** |
+| Authority gate incl. JSON Schema validation | avg | same | same | **0.23–0.27 µs** |
+| Log redaction on a nested payload | avg | same | same | **2.4 µs** |
+| Graph validation scales ~linearly in node count | avg by size | same | same | 1.2 / 15.8 / 162.4 µs at 10 / 100 / 1000 |
+
+**Benchmark caveat, stated rather than buried:** several JMH measurements have an error estimate
+larger than the score (graph validation at 100 nodes reads `15.8 ± 21.5`). Those figures are not
+reliable and are published with their error bars rather than dropped or re-run until they looked
+better. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+All measurements are **local reproducible benchmark results** on one developer machine
+(Apple M2, 8 cores, 16 GB, JDK 21, Docker 20.10.21) recorded in
+`benchmarks/results/environment.json`. They are not a production capacity measurement.
+
 ## Build, tests, coverage
 
 | Metric | Command | Observed |
 |---|---|---|
-| Total tests | `./mvnw clean verify` | **275, 0 failures, 0 errors** |
-| Coverage, overall | JaCoCo | **42.9%** |
+| Total tests | `./mvnw clean verify` | **305, 0 failures, 0 errors** |
+| Coverage, overall | JaCoCo | **42.6%** |
 | Coverage, `runtime.model` | JaCoCo | **100.0%** |
 | Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
 | Coverage, `runtime.state` | JaCoCo | **97.7%** |
@@ -140,6 +161,8 @@ capability claim anywhere in this repository.
 | MCP over stdio | The protocol layer is real and tested over an in-process transport; an out-of-process transport is not implemented |
 | Retrieval Recall@K / MRR / NDCG | No golden dataset yet (M5) |
 | Single-agent vs multi-agent ablation | Multi-agent not implemented (M7) |
-| Any latency or throughput figure | **No benchmark has been run.** No p50/p95/p99 exists (M6) |
-| Sandbox cold-start timing | Not measured (M6) |
+| Concurrent run throughput | No load harness exists |
+| PostgreSQL checkpoint and node-claim latency | Dominated by the database; needs a controlled instance |
+| Tracing overhead | No exporter configured, so a figure would measure nothing representative |
+| CPU and memory under load | No load test exists |
 | Production scale | Never deployed; never load-tested |

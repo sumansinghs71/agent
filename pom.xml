@@ -120,6 +120,33 @@
             <artifactId>js-scriptengine</artifactId>
             <version>22.3.0</version>
         </dependency>
+        <!-- OpenTelemetry. Spans carry the high-cardinality identifiers (runId, nodeId, toolId)
+             that must never become metric labels; metrics stay low-cardinality and the trace
+             carries the detail needed to explain a single failure. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <version>1.45.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+            <version>1.45.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <version>1.45.0</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Structured JSON logging -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>8.0</version>
+        </dependency>
+
         <!-- JSON Schema validation for tool inputs and outputs. Hand-rolled argument checking
              cannot express the constraints a tool author actually needs (types, enums, ranges,
              required combinations), and a partial validator is worse than none because it reads
@@ -151,6 +178,21 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- JMH. Microbenchmarks need warmup, forked JVMs and dead-code elimination defences;
+             a hand-rolled loop with System.nanoTime measures the JIT, not the code. -->
+        <dependency>
+            <groupId>org.openjdk.jmh</groupId>
+            <artifactId>jmh-core</artifactId>
+            <version>1.37</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.openjdk.jmh</groupId>
+            <artifactId>jmh-generator-annprocess</artifactId>
+            <version>1.37</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- Test -->
