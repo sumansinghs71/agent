@@ -61,6 +61,7 @@ jobs:
             echo "ok: $1 ran $total tests"
           }
           check_suite com.chatbot.agent.runtime.persistence.DurableRuntimeTest 15
+          check_suite com.chatbot.agent.runtime.exec.EndToEndRunTest 12
           check_suite com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest 12
 
       - name: Coverage report

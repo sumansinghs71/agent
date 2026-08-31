@@ -1,7 +1,7 @@
 # 16 — Durable Runtime: Results
 
 **Milestone:** M2 · **Date:** 2026-08-30
-**Status:** core delivered and tested; scheduler wiring deferred — see §5
+**Status:** delivered, including the scheduler and end-to-end crash/resume
 
 ---
 
@@ -14,12 +14,15 @@
 | Retry policy | [`RetryPolicy`](../src/main/java/com/chatbot/agent/runtime/model/RetryPolicy.java) | 7 |
 | Durable persistence | [`RunRepository`](../src/main/java/com/chatbot/agent/runtime/persistence/RunRepository.java) | 20 |
 | Schema | [`V1__agent_runtime.sql`](../src/main/resources/db/migration/V1__agent_runtime.sql) | via the above |
+| Scheduler | [`RunScheduler`](../src/main/java/com/chatbot/agent/runtime/exec/RunScheduler.java) | 14 (end-to-end) |
+| Run service | [`AgentRunService`](../src/main/java/com/chatbot/agent/runtime/exec/AgentRunService.java) | via the above |
+| Plan serialisation | [`GraphCodec`](../src/main/java/com/chatbot/agent/runtime/exec/GraphCodec.java) | via the above |
 
-**69 new tests. Total suite: 182, 0 failures, 0 errors.**
+**83 new tests. Total suite: 196, 0 failures, 0 errors.**
 
 ```
 ./mvnw clean verify
-Tests run: 182, Failures: 0, Errors: 0, Skipped: 0
+Tests run: 196, Failures: 0, Errors: 0, Skipped: 0
 ```
 
 The persistence tests run against **real PostgreSQL 16** in a container, not H2. The behaviour under
@@ -30,14 +33,15 @@ in-memory emulation would be verifying the emulation.
 
 ## 2. Coverage
 
-Overall **30.2%** (1589/5265 lines), up from 27.0%. Concentrated where it belongs:
+Overall **34.5%**, up from 27.0%. Concentrated where it belongs:
 
 | Package | Line coverage |
 |---|---|
-| `runtime.state` | **95.3%** |
-| `runtime.persistence` | **89.6%** |
-| `runtime.graph` | 81.1% |
-| `runtime.model` | 79.4% |
+| `runtime.model` | **100.0%** |
+| `runtime.persistence` | **99.0%** |
+| `runtime.state` | **97.7%** |
+| `runtime.graph` | 91.3% |
+| `runtime.exec` (scheduler) | 89.9% |
 | `service.policy` (M0) | 89.9% |
 | `service.tools.sandbox` (M0) | 82.4% |
 
@@ -106,37 +110,52 @@ unbounded, and tagging by them would grow cardinality without limit. Per-node de
 
 ---
 
-## 5. What is NOT done — stated plainly
+## 5. End-to-end execution — delivered
 
-**The scheduler is not wired into the application.** M2 delivers the durable model, the validated
-graph, the state machine and the persistence layer, with the concurrency and recovery guarantees
-tested. It does **not** yet deliver a running loop that drives a real `AgentRun` end to end through
-`ToolExecutionService`.
+The scheduler is wired and driven by durable state. Every tick reads the run from the database
+rather than from memory, which is what makes resume work: a scheduler that has just started is
+indistinguishable from one that has been running all along.
 
-Consequently:
+Verified end to end against real PostgreSQL:
 
-- No end-to-end "submit a graph, watch it execute, kill the process, watch it resume" test exists yet.
-- `ReasoningAgentService` still executes tools directly, not as graph nodes.
-- The approval tables exist and are covered by the state machine, but no approval *workflow* does
-  (that is M3).
-- Crash recovery is verified at the **repository** level — expired leases are detected and reclaimed
-  correctly — not by actually killing a JVM mid-run.
+| Behaviour | Assertion |
+|---|---|
+| `A → B → C` | executes in dependency order; run SUCCEEDED |
+| `A → [B,C] → D` | B and C both precede D; **D runs exactly once**, not once per dependency |
+| Terminal failure | dependents SKIPPED and never executed; run PARTIAL |
+| Independent branch | unaffected by a sibling branch failing |
+| Retryable failure | retried, succeeds on attempt 3; all 3 attempts recorded durably |
+| Attempt cap | stops at 2 attempts, node FAILED_TERMINAL |
+| Run-wide retry budget | bounds total retries across the whole graph |
+| Ambiguous failure, no key | **not retried** — the effect may already have happened |
+| Ambiguous failure, with key | retried, because the downstream can deduplicate |
+| **Crash and resume** | a second scheduler completes a run abandoned by the first; the already-succeeded node is **not** re-executed; the reclaim is recorded as `LEASE_RECLAIMED` |
+| **Resume after a completed effect** | the executor is **not invoked at all**; the original result is adopted rather than a duplicate produced |
+| Repeatedly abandoned node | abandoned attempts count against the cap, so it fails rather than looping forever |
+| Cancellation | completed work is not undone; outstanding nodes go CANCELLED, distinct from SKIPPED |
+| Plan durability | the graph round-trips through storage and rebuilds with side-effect classes and keys intact |
 
-This is a real gap and the README must not imply otherwise. What can be claimed today is
-*"durable execution state with tested concurrency, recovery and idempotency semantics"*, **not**
-*"durable workflow execution"*. The remaining work is the scheduler loop plus an end-to-end
-crash test, and it is the first item of the next block of work rather than something quietly
-dropped.
+Two of these tests initially failed, and both were defects in the **test harness**, not the
+scheduler: `tick()` promotes and executes in a single pass, so the node completed before there was
+any in-flight work to abandon. The simulations now drive the promote/claim/abandon sequence directly.
 
-### Also not done
-- Flyway auto-configuration is disabled (several DataSources, no primary); the runtime schema is
-  applied explicitly. Wiring a dedicated runtime `DataSource` comes with the scheduler.
-- Distributed scheduling. M2 assumes one active scheduler; optimistic locking exists so that
-  violating the assumption fails loudly rather than corrupting state.
-- Exactly-once side effects — not achievable, not claimed. See
+## 5.1 What is still NOT done
+
+- **`ReasoningAgentService` still executes tools directly**, not as graph nodes. The runtime exists
+  and is tested; the agent has not yet been rebuilt on top of it. That integration is M3 work,
+  alongside the typed tool contract.
+- **Approval is a state, not a workflow.** `WAITING_APPROVAL` and the `agent_approval` table exist
+  and the state machine covers them, but nothing requests or grants an approval yet (M3).
+- **Crash is simulated by lease expiry, not by killing a JVM.** The distinction is honest: what is
+  proven is that a scheduler which observes an expired lease recovers correctly and does not repeat
+  completed effects. A test that actually kills a process would additionally exercise the OS and
+  connection-pool teardown paths.
+- **Single scheduler.** Optimistic locking and leases mean that violating this assumption fails
+  loudly rather than corrupting state; they do not make scheduling distributed.
+- **Flyway auto-configuration is disabled** (several DataSources, no primary); the runtime schema is
+  applied explicitly. A dedicated runtime `DataSource` bean comes with the M3 integration.
+- **Exactly-once side effects** — not achievable, not claimed. See
   [`15_IDEMPOTENCY_MODEL.md`](15_IDEMPOTENCY_MODEL.md) §4.
-
----
 
 ## 6. Reproduction
 
@@ -145,8 +164,8 @@ git clone https://github.com/sumansinghs71/agent.git && cd agent && git checkout
 docker pull postgres:16-alpine
 ./mvnw clean verify
 
-# just the durable-runtime suite
-./mvnw test -Dtest='DurableRuntimeTest,ExecutionGraphTest,NodeStateMachineTest,RetryPolicyTest'
+# just the durable-runtime suites
+./mvnw test -Dtest='DurableRuntimeTest,EndToEndRunTest,ExecutionGraphTest,NodeStateMachineTest,RetryPolicyTest'
 ```
 
 Requires a Docker daemon. The PostgreSQL suite is `@EnabledIf(dockerAvailable)` and **skips**
