@@ -250,10 +250,6 @@ public class ToolExecutionProperties {
          */
         private java.util.List<String> allowedRequestHeaders = java.util.List.of(
                 "accept", "accept-language", "content-type", "user-agent", "x-request-id");
-
-        private boolean validateEveryCall = true;
-        
-        private boolean logAllExecutions = true;
         
         @Min(1)
         private int maxToolCallsPerRequest = 20;
@@ -303,8 +299,7 @@ public class ToolExecutionProperties {
      * Performance settings
      */
     @Data
-    public static class Performance {
-        private boolean enableParallelExecution = false; // Future feature
+    public static class Performance { // Future feature
         
         @Min(1)
         private int threadPoolSize = 10;
@@ -313,10 +308,7 @@ public class ToolExecutionProperties {
         private int threadPoolQueueSize = 100;
         
         @Min(1)
-        private long threadKeepAliveSeconds = 60;
-        
-        @Min(100000)
-        private long maxMemoryPerChainBytes = 512_000_000; // 512MB
+        private long threadKeepAliveSeconds = 60; // 512MB
     }
     
     /**

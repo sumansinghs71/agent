@@ -1,3 +1,7 @@
+> **ARCHIVED.** Predates the M0 audit and describes a security posture the code no longer
+> has. Superseded by [`../00_CURRENT_STATE_AUDIT.md`](../00_CURRENT_STATE_AUDIT.md).
+> Source links point at the tree as it was; some line numbers no longer match.
+
 # Agent Platform — End-to-End Code Analysis
 
 Scope: `/Users/sumansingh/Education/agent` only (branch `DAG`). ~9,500 lines of Java across 61 files.
@@ -75,9 +79,9 @@ rather than in the agent — is the single biggest thing to fix if you want to "
 
 ### 3.1 Python sandbox escape → RCE (verified)
 
-`PythonJavaScriptToolExecutor.validatePythonCode` ([:269](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:269))
+`PythonJavaScriptToolExecutor.validatePythonCode` ([:269](../../src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:269))
 is a regex denylist plus a "no `__`" rule. Meanwhile `PythonScriptBuilder.buildImports`
-([:82](src/main/java/com/chatbot/agent/service/tools/PythonScriptBuilder.java:82)) writes `import sys`
+([:82](../../src/main/java/com/chatbot/agent/service/tools/PythonScriptBuilder.java:82)) writes `import sys`
 into the *generated* script — and `sys` is reachable from user code via `globals()`, which is not on the
 denylist and contains no dunder:
 
@@ -94,7 +98,7 @@ anyone create tools, this is remote, unauthenticated RCE as the JVM user.
 
 Compounding factors:
 - `interpreter-args: ["--isolated"]` is configured in `application.yml:54` but **never passed** to
-  `ProcessBuilder` ([:141](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:141)).
+  `ProcessBuilder` ([:141](../../src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:141)).
 - No OS-level isolation at all: no container, no seccomp, no `RLIMIT`, no unprivileged user, no
   network namespace. `max-memory-per-chain-bytes` is decorative.
 - Generated scripts are written to a world-readable `$TMPDIR/chatbot-scripts/` with default permissions.
@@ -104,12 +108,12 @@ Compounding factors:
 
 ### 3.2 No authentication on tool execution
 
-`SecurityConfig` ([:36](src/main/java/com/chatbot/agent/config/SecurityConfig.java:36)) sets
+`SecurityConfig` ([:36](../../src/main/java/com/chatbot/agent/config/SecurityConfig.java:36)) sets
 `.requestMatchers("/api/**").permitAll()`. Consequences:
 - `POST /api/chatbots/{id}/execute-tool`, `POST /api/tools/{chatbotId}` (create a tool), and
   `POST /api/tools/{chatbotId}/execute` are all open to anonymous callers.
 - `@AuthenticationPrincipal UserDetails` is therefore always `null`, so `getUserId()` always returns
-  `"anonymous"` ([ChatbotController:195](src/main/java/com/chatbot/agent/controller/ChatbotController.java:195)).
+  `"anonymous"` ([ChatbotController:195](../../src/main/java/com/chatbot/agent/controller/ChatbotController.java:195)).
   Every audit log line, every `ExecutionContext`, and `forceCloseForUser()` are attributing all work to
   one synthetic user. There is no per-user isolation or rate limiting anywhere.
 - `/actuator/**` is also `permitAll` and `health.show-details: always` — internal state is public.
@@ -126,7 +130,7 @@ were hardcoded.
 
 ### 3.4 Path traversal on document upload
 
-`DocumentService.uploadDocument` ([:68](src/main/java/com/chatbot/agent/service/DocumentService.java:68))
+`DocumentService.uploadDocument` ([:68](../../src/main/java/com/chatbot/agent/service/DocumentService.java:68))
 builds `System.currentTimeMillis() + "_" + file.getOriginalFilename()` and calls `uploadPath.resolve(...)`.
 `getOriginalFilename()` is attacker-controlled and unsanitized; `../../` escapes the upload dir. There is
 also no content-type allowlist and no size cap beyond the 50 MB multipart limit.
@@ -134,18 +138,18 @@ also no content-type allowlist and no size cap beyond the 50 MB multipart limit.
 ### 3.5 JavaScript validator is weaker than the (unused) one
 
 Two denylists exist. The **active** one (`PythonJavaScriptToolExecutor.DANGEROUS_JS_PATTERNS`,
-[:57](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:57)) omits three
-entries that the **dead** `CodeValidatorService.JS_DANGEROUS` ([:53](src/main/java/com/chatbot/agent/service/tools/CodeValidatorService.java:53)) has:
+[:57](../../src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:57)) omits three
+entries that the **dead** `CodeValidatorService.JS_DANGEROUS` ([:53 (deleted in M0 as dead code - see ADR 0001)) has:
 `Function\(`, `global\.`, `globalThis\.`. So `Function("return this")()` reaches the JS global object
 through the enforced path. Someone hardened the wrong class.
 
 Also in the JS path: params are interpolated into a JS source string via manual quote escaping
-([:234](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:234)) rather than
+([:234](../../src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:234)) rather than
 bound as a value — ` `/` ` are not escaped and will break out of the string literal.
 
 ### 3.6 SSRF allowlist is advisory only
 
-`RuntimeGuardrailsService.validateApiUrl` ([:131](src/main/java/com/chatbot/agent/service/guardrails/RuntimeGuardrailsService.java:131))
+`RuntimeGuardrailsService.validateApiUrl` ([:131](../../src/main/java/com/chatbot/agent/service/guardrails/RuntimeGuardrailsService.java:131))
 computes `domainAllowed` and then **logs a warning and allows it anyway**. The private-range check is a
 string-prefix test on the hostname, so it is bypassed by DNS names resolving to private IPs, IPv6
 (`[::1]`), decimal/octal IP encodings, `169.254.169.254` (cloud metadata — not in the list at all), and
@@ -164,16 +168,16 @@ These are things that are simply broken today, independent of security.
 
 | Feature | Location | Effect |
 |---|---|---|
-| Context leak detection | `ExecutionContextFactory.detectLeaks` [:124](src/main/java/com/chatbot/agent/service/tools/ExecutionContextFactory.java:124) | Leaked contexts accumulate forever |
-| Tool cache refresh | `ToolRegistryService.refreshAllCaches` [:220](src/main/java/com/chatbot/agent/service/tools/ToolRegistryService.java:220) | Only the Caffeine TTL is doing anything |
-| Async doc indexing | `DocumentService.processDocumentAsync` [:84](src/main/java/com/chatbot/agent/service/DocumentService.java:84) | Upload blocks until embedding+indexing completes |
+| Context leak detection | `ExecutionContextFactory.detectLeaks` [:124](../../src/main/java/com/chatbot/agent/service/tools/ExecutionContextFactory.java:124) | Leaked contexts accumulate forever |
+| Tool cache refresh | `ToolRegistryService.refreshAllCaches` [:220](../../src/main/java/com/chatbot/agent/service/tools/ToolRegistryService.java:220) | Only the Caffeine TTL is doing anything |
+| Async doc indexing | `DocumentService.processDocumentAsync` [:84](../../src/main/java/com/chatbot/agent/service/DocumentService.java:84) | Upload blocks until embedding+indexing completes |
 
 `processDocumentAsync` is doubly broken: it is called via `this.` from `uploadDocument` in the same bean,
 so the Spring proxy is bypassed regardless.
 
 ### 4.2 Python tools return `null` unless the author writes `ezMain` explicitly
 
-`PythonScriptBuilder.buildUserCode` ([:228](src/main/java/com/chatbot/agent/service/tools/PythonScriptBuilder.java:228)):
+`PythonScriptBuilder.buildUserCode` ([:228](../../src/main/java/com/chatbot/agent/service/tools/PythonScriptBuilder.java:228)):
 if the code lacks `def ezMain(`, it indents the body into `def ezMain(data):` — **without adding a
 `return`**. The JS wrapper handles exactly this case (`JavaScriptCodeWrapper.wrapCode` appends
 `return null;` and at least reasons about it), but the Python path does not.
@@ -191,7 +195,7 @@ builder, and the shipped samples must be regenerated.
 
 ### 4.3 SQL guardrail rejects ordinary SELECTs
 
-`RuntimeGuardrailsService.validateSqlQuery` ([:49](src/main/java/com/chatbot/agent/service/guardrails/RuntimeGuardrailsService.java:49))
+`RuntimeGuardrailsService.validateSqlQuery` ([:49](../../src/main/java/com/chatbot/agent/service/guardrails/RuntimeGuardrailsService.java:49))
 does `upperSql.contains(keyword)` over `{DROP, DELETE, TRUNCATE, ALTER, CREATE, GRANT, REVOKE, INSERT,
 UPDATE, EXEC, EXECUTE, SHUTDOWN, KILL}` — substring, not token, matching. So:
 
@@ -209,7 +213,7 @@ aimed at the wrong target. Replace with a parsed-statement check (single stateme
 
 ### 4.4 Greetings are blocked by the output guardrail
 
-`OutputGuardrailsService.checkRelevance` ([:228](src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:228))
+`OutputGuardrailsService.checkRelevance` ([:228](../../src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:228))
 counts query words with `length > 3` that appear in the output, divides by **total** query word count,
 and blocks below 0.2. For the query `"hi"` there are no words longer than 3 characters, so
 `relevance = 0/1 = 0.0` → blocked → the user receives *"I apologize, but I cannot provide a reliable
@@ -218,8 +222,8 @@ branch exists specifically to handle greetings and is then vetoed at STEP 5.
 
 ### 4.5 Tool CRUD silently discards Python/JS code
 
-`ToolRepository.insert` ([:124](src/main/java/com/chatbot/agent/repository/ToolRepository.java:124)) and
-`update` ([:157](src/main/java/com/chatbot/agent/repository/ToolRepository.java:157)) omit
+`ToolRepository.insert` ([:124](../../src/main/java/com/chatbot/agent/repository/ToolRepository.java:124)) and
+`update` ([:157](../../src/main/java/com/chatbot/agent/repository/ToolRepository.java:157)) omit
 `python_code`, `python_version`, `allowed_modules`, and `js_code` from their column lists — but
 `toolRowMapper` reads all four. Creating a `PYTHON` or `JAVASCRIPT` tool through `ToolController` stores
 a row with `NULL` code; execution then fails with "Python code empty". The only way to create a working
@@ -228,7 +232,7 @@ impossible.)
 
 ### 4.6 Guardrail violations are never persisted
 
-`GuardrailLogService.logViolation` ([:27](src/main/java/com/chatbot/agent/service/guardrails/GuardrailLogService.java:27))
+`GuardrailLogService.logViolation` ([:27](../../src/main/java/com/chatbot/agent/service/guardrails/GuardrailLogService.java:27))
 is a `log.warn` with a `// TODO: Save to database`. The `guardrail_log` table it references is not in any
 schema file. There is no audit trail. Likewise `tool_execution_log` exists in the schema but nothing
 writes to it.
@@ -239,26 +243,26 @@ writes to it.
 
 **Threading / resources**
 - `AppConfig` uses `DriverManagerDataSource` for the primary MySQL and pgvector datasources
-  ([:47](src/main/java/com/chatbot/agent/config/AppConfig.java:47)) — **no connection pooling**; a new
+  ([:47](../../src/main/java/com/chatbot/agent/config/AppConfig.java:47)) — **no connection pooling**; a new
   physical connection per operation. Ironically `DynamicDataSourceConfig` (the *tool* datasources) does
   it correctly with Hikari. Move the primaries to Hikari too.
-- `RestTemplate` read timeout is commented out ([AppConfig:86](src/main/java/com/chatbot/agent/config/AppConfig.java:86)).
+- `RestTemplate` read timeout is commented out ([AppConfig:86](../../src/main/java/com/chatbot/agent/config/AppConfig.java:86)).
   A hung Azure/Ollama/REST-tool endpoint pins a servlet thread indefinitely. This one `RestTemplate` is
   shared by `AiRouterService`, `OllamaService`, `AzureSearchService`, and all REST tools.
-- `AiRouterService.callAzureOpenAiWithRetry` ([:49](src/main/java/com/chatbot/agent/service/AiRouterService.java:49))
+- `AiRouterService.callAzureOpenAiWithRetry` ([:49](../../src/main/java/com/chatbot/agent/service/AiRouterService.java:49))
   does `Thread.sleep(60000)` on the request thread, twice — a 429 storm blocks the pool for 2 minutes per
   request. Use `Retry-After` + a bounded async retry.
-- `OllamaService.generateResponse` ([:139](src/main/java/com/chatbot/agent/service/OllamaService.java:139))
+- `OllamaService.generateResponse` ([:139](../../src/main/java/com/chatbot/agent/service/OllamaService.java:139))
   passes `Timeout.of(Duration.ofSeconds(30))` as the **varargs URI-variable** parameter of
   `restTemplate.exchange(...)` — it is silently ignored, not a timeout. `options.put("timeout", 30000)` is
   likewise not an Ollama option.
 - `PythonJavaScriptToolExecutor` hardcodes `Executors.newFixedThreadPool(5)`
-  ([:68](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:68)) while
+  ([:68](../../src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java:68)) while
   `tool-execution.performance.thread-pool-size: 10` is configured and unread. `shutdown()` is never
   called (no `@PreDestroy`).
 - `PythonProtocolHandler` allocates a `newSingleThreadExecutor` per execution and never submits to it —
   pure overhead. Its `readerThread` field is unused; the read loop is blocking on `stdout.readLine()`,
-  which means `checkTimeout()` ([:285](src/main/java/com/chatbot/agent/service/tools/PythonProtocolHandler.java:285))
+  which means `checkTimeout()` ([:285](../../src/main/java/com/chatbot/agent/service/tools/PythonProtocolHandler.java:285))
   can only fire *between* lines. **A Python tool that emits nothing hangs forever** — the timeout never
   triggers. Also, stderr is only drained on EOF, so a chatty stderr can fill the OS pipe buffer and
   deadlock the child.
@@ -266,45 +270,45 @@ writes to it.
   from concurrent request threads (benign-ish, but a genuine race on `accessCount`).
 
 **Logic**
-- `ToolRegistryService.getTool` ([:104](src/main/java/com/chatbot/agent/service/tools/ToolRegistryService.java:104)):
+- `ToolRegistryService.getTool` ([:104](../../src/main/java/com/chatbot/agent/service/tools/ToolRegistryService.java:104)):
   on a cache miss for a tool name it **invalidates the whole chatbot's cache and reloads from the DB**.
   Since the intent LLM regularly hallucinates tool names, this turns a typo into a full cache flush +
   DB round-trip on every such request. Cache negative lookups instead.
-- `ReasoningAgentService.parseIntentResponse` ([:601](src/main/java/com/chatbot/agent/service/ReasoningAgentService.java:601))
+- `ReasoningAgentService.parseIntentResponse` ([:601](../../src/main/java/com/chatbot/agent/service/ReasoningAgentService.java:601))
   never validates that `tool_name` is in `availableTools`, and `ActionType.valueOf(action)` throws on a
   lowercase `"tool"` — both failure modes silently degrade to `DOCUMENT`, so a broken tool call looks
   like a bad RAG answer. There is also no confidence threshold: `confidence` is parsed, logged, and
   never used for anything.
-- `AzureSearchService.searchChunksWithMetadata` ([:260](src/main/java/com/chatbot/agent/service/AzureSearchService.java:260))
+- `AzureSearchService.searchChunksWithMetadata` ([:260](../../src/main/java/com/chatbot/agent/service/AzureSearchService.java:260))
   normalizes scores as `raw/max`, so the top hit is **always** 1.0. Citations then report "100%
   confidence" regardless of actual match quality.
-- `CitationService.addCitations` ([:49](src/main/java/com/chatbot/agent/service/citation/CitationService.java:49))
+- `CitationService.addCitations` ([:49](../../src/main/java/com/chatbot/agent/service/citation/CitationService.java:49))
   mints a **new citation ID per sentence per chunk**. One chunk cited across five sentences yields five
   IDs and five duplicate "Sources" entries. Needs dedup keyed on `chunkId`.
-- `CitationService.splitIntoSentences` ([:88](src/main/java/com/chatbot/agent/service/citation/CitationService.java:88))
+- `CitationService.splitIntoSentences` ([:88](../../src/main/java/com/chatbot/agent/service/citation/CitationService.java:88))
   advances `currentIndex` by the *trimmed* sentence length, so `startIndex`/`endIndex` do not map to the
   original string — and `buildAnnotatedResponse` rejoins with `" "`, destroying newlines and formatting.
-- `OutputGuardrailsService.checkSelfConsistency` ([:126](src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:126))
+- `OutputGuardrailsService.checkSelfConsistency` ([:126](../../src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:126))
   is fully commented out, `return 0.8;` — which makes `isStatementGroundedInContext` and
-  `extractKeywords` dead. `containsToxicContent` ([:274](src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:274))
+  `extractKeywords` dead. `containsToxicContent` ([:274](../../src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:274))
   is `return false;`, and `InputGuardrailsService.TOXIC_KEYWORDS` is an empty list — **the toxicity
   filter is a no-op on both sides** while being reported as enabled.
-- `UNCERTAIN_PATTERN` uses `.matches()` with `.` and no `DOTALL` ([:96](src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:96)),
+- `UNCERTAIN_PATTERN` uses `.matches()` with `.` and no `DOTALL` ([:96](../../src/main/java/com/chatbot/agent/service/guardrails/OutputGuardrailsService.java:96)),
   so it can never match a multi-line answer.
-- `InputGuardrailsService.detectPii` ([:181](src/main/java/com/chatbot/agent/service/guardrails/InputGuardrailsService.java:181))
+- `InputGuardrailsService.detectPii` ([:181](../../src/main/java/com/chatbot/agent/service/guardrails/InputGuardrailsService.java:181))
   sets a violation but leaves `allowed = true`, so the caller's `if (!piiResult.isAllowed())` branch is
   unreachable and the violation is never logged. Redaction still happens.
 - Injection/jailbreak denylists are pure substring matches with heavy false positives: `"user:"`,
   `"system:"`, `"you are now"`, `"from now on"`, `"act as if"`. *"Tell me about user: John"* and
   *"From now on use metric units"* are both blocked as attacks.
-- `AiRouterService.extractInnerJson` ([:121](src/main/java/com/chatbot/agent/service/AiRouterService.java:121))
+- `AiRouterService.extractInnerJson` ([:121](../../src/main/java/com/chatbot/agent/service/AiRouterService.java:121))
   parses Ollama's response with `indexOf` string surgery and returns `null` on mismatch — an NPE waiting
   downstream. `callLlama` hardcodes `"llama2"` instead of using `llama.generation-model`, and hand-builds
   JSON via `String.format` with manual escaping.
-- `ExecutionContext.unregisterToolCallWithError` ([:200](src/main/java/com/chatbot/agent/service/tools/ExecutionContext.java:200))
+- `ExecutionContext.unregisterToolCallWithError` ([:200](../../src/main/java/com/chatbot/agent/service/tools/ExecutionContext.java:200))
   does not `calledTools.remove(toolId)` while the success path does — an asymmetry. (`calledTools` is
-  redundant anyway: the real cycle check is the stack scan at [:133](src/main/java/com/chatbot/agent/service/tools/ExecutionContext.java:133).)
-- `GlobalExceptionHandler.buildErrorResponse` ([:16](src/main/java/com/chatbot/agent/exception/GlobalExceptionHandler.java:16))
+  redundant anyway: the real cycle check is the stack scan at [:133](../../src/main/java/com/chatbot/agent/service/tools/ExecutionContext.java:133).)
+- `GlobalExceptionHandler.buildErrorResponse` ([:16](../../src/main/java/com/chatbot/agent/exception/GlobalExceptionHandler.java:16))
   labels the **HTTP session ID** as `requestId` (forcing session creation on every error) instead of
   reading the MDC `requestId` the rest of the codebase sets. Its `@ExceptionHandler(Exception.class)`
   also returns raw `ex.getMessage()` to clients — internal detail leakage, and it contradicts
@@ -325,7 +329,7 @@ writes to it.
 - `ToolExecutionConfig` — declares `@Bean` methods for two classes that are *also* `@Service`-annotated.
   Spring silently keeps the component-scanned definitions and discards these `@Bean` methods. The file
   has no effect; the circular-dependency wiring it claims to solve is actually done by the
-  `ToolExecutionService` constructor ([:74](src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java:74)).
+  `ToolExecutionService` constructor ([:74](../../src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java:74)).
 - `ToolExecutionService.toolRepository` — injected, never used (the registry owns DB access).
 - `ReasoningAgentService`: `executeBasedOnIntent`, `executeToolAction`, `executeDocumentAction`,
   `executeHybridAction`, `executeConversationalAction`, `formatHybridResultWithAI`,
@@ -353,7 +357,7 @@ class where most fields are decorative:
 - `citation.*` (all three keys in `application.properties`) — `CitationService` hardcodes
   `MAX_EXCERPT_LENGTH = 150`, threshold `0.15f`, topN `2`
 - `azure.openai.api-version: 2021-04-30` — the URL hardcodes `2025-01-01-preview` instead
-  ([AiRouterService:87](src/main/java/com/chatbot/agent/service/AiRouterService.java:87))
+  ([AiRouterService:87](../../src/main/java/com/chatbot/agent/service/AiRouterService.java:87))
 - per-tool `allowedModules` is read from the DB into `ToolModel.Tool` and then ignored; only the global
   `python.allowed-modules` list is used
 

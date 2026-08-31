@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: "/"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 10
+    groups:
+      spring:
+        patterns: ["org.springframework*"]
+      test-tooling:
+        patterns: ["org.junit*", "org.mockito*", "org.testcontainers*"]
+
+  # Actions are pinned by commit SHA in the security workflow, so this is the mechanism that keeps
+  # them current. Without it, SHA pinning silently becomes "frozen on a stale, possibly vulnerable
+  # version" - which is a worse outcome than a mutable tag.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: { interval: weekly }

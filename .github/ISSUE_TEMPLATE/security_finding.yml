@@ -1,0 +1,27 @@
+name: Security finding (public)
+description: A weakness that is ALREADY public — e.g. an item in the current-state audit
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Stop if this is not already public
+
+        For anything not already documented in this repository, use
+        **private vulnerability reporting** instead of this form. See `SECURITY.md`.
+
+        Several weaknesses are already known and documented — check
+        `docs/00_CURRENT_STATE_AUDIT.md` and `SECURITY.md` before filing.
+  - type: checkboxes
+    attributes:
+      options:
+        - label: This weakness is already publicly documented in this repository
+          required: true
+  - type: textarea
+    attributes:
+      label: The weakness
+    validations: { required: true }
+  - type: textarea
+    attributes:
+      label: Which control is claimed to prevent it, and why it does not
+    validations: { required: true }

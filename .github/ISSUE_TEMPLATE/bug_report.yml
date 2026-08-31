@@ -1,0 +1,31 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste secrets, tokens, or real credentials.** Redact before submitting.
+  - type: textarea
+    attributes:
+      label: What happened
+    validations: { required: true }
+  - type: textarea
+    attributes:
+      label: What you expected
+    validations: { required: true }
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Exact commands from a fresh clone.
+      render: shell
+    validations: { required: true }
+  - type: input
+    attributes:
+      label: Commit SHA
+    validations: { required: true }
+  - type: dropdown
+    attributes:
+      label: Sandbox mode
+      options: [DOCKER, "LOCAL (unsafe opt-in)", not applicable]
+    validations: { required: true }

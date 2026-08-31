@@ -9,11 +9,21 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.chatbot</groupId>
-    <artifactId>hybrid-chatbot</artifactId>
-    <version>1.0.0</version>
-    <name>hybrid-chatbot</name>
-    <description>Hybrid AI Chatbot Platform</description>
+    <groupId>io.github.sumansinghs71</groupId>
+    <artifactId>agent-runtime-lab</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>Agent Runtime Lab</name>
+    <description>A production-oriented agent harness for stateful tool use, durable DAG execution,
+        MCP integration, human approvals, isolated code execution, replay, evaluation, and failure
+        recovery.</description>
+    <url>https://github.com/sumansinghs71/agent</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
 
     <properties>
         <java.version>17</java.version>
@@ -166,6 +176,29 @@
               baseline is published in CI and in docs/00_M0_SECURITY_COMPLETION_REPORT.md; a
               meaningful gate on the runtime and security packages comes with M5.
             -->
+            <!--
+              SBOM (CycloneDX). Generated on every `verify` so the dependency inventory is a build
+              artifact rather than something reconstructed later from memory. Trivy and Dependabot
+              answer "is anything vulnerable today"; the SBOM answers "what was actually in the
+              build that shipped", which is the question that matters during an incident.
+            -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>2.8.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>makeAggregateBom</goal></goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <outputName>sbom</outputName>
+                    <outputFormat>all</outputFormat>
+                    <schemaVersion>1.5</schemaVersion>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>

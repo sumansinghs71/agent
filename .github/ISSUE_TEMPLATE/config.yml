@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private vulnerability report
+    url: https://github.com/sumansinghs71/agent/security/advisories/new
+    about: For any security issue not already public. Do not open a public issue.

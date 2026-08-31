@@ -54,6 +54,16 @@ jobs:
                        (lt? 100*lc[p]/lt : 0),
                        (bt? sprintf("%.1f%%", 100*bc[p]/bt) : "n/a") }}' "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            target/sbom.json
+            target/sbom.xml
+          retention-days: 90
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -79,6 +89,11 @@ jobs:
       # instead and tighten once the backlog is cleared.
       - name: Compiler warnings
         run: ./mvnw -B -ntp clean compile -Dmaven.compiler.showWarnings=true
+
+      # Docs in this repository link to the code that backs each claim. A broken link is the first
+      # visible symptom of documentation drifting away from the implementation, so it fails the build.
+      - name: Documentation links resolve
+        run: python3 tools/check-doc-links.py
 
   dependency-scan:
     name: Dependency vulnerabilities

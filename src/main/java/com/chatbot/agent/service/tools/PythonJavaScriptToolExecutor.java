@@ -87,9 +87,21 @@ public class PythonJavaScriptToolExecutor {
             com.chatbot.agent.metrics.AgentMetrics metrics) {
 
         this.metrics = metrics;
-        this.executorService = Executors.newFixedThreadPool(
+        // Bounded on purpose. Executors.newFixedThreadPool() pairs a fixed pool with an UNBOUNDED
+        // LinkedBlockingQueue, so work submitted faster than it completes accumulates in heap with
+        // no upper limit and no backpressure - the failure mode is an OutOfMemoryError far from the
+        // cause. The queue bound was already configurable as
+        // tool-execution.performance.thread-pool-queue-size; nothing read it.
+        //
+        // AbortPolicy is deliberate: when the queue is full, callers get a
+        // RejectedExecutionException immediately. Shedding load loudly beats queueing it silently.
+        this.executorService = new ThreadPoolExecutor(
                 config.getPerformance().getThreadPoolSize(),
-                namedDaemonFactory("eztool-js-"));
+                config.getPerformance().getThreadPoolSize(),
+                config.getPerformance().getThreadKeepAliveSeconds(), TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(config.getPerformance().getThreadPoolQueueSize()),
+                namedDaemonFactory("eztool-js-"),
+                new ThreadPoolExecutor.AbortPolicy());
         this.watchdogScheduler = Executors.newScheduledThreadPool(2, namedDaemonFactory("eztool-watchdog-"));
         this.scriptEngineManager = new ScriptEngineManager();
         this.pythonScriptBuilder = pythonScriptBuilder;
