@@ -453,7 +453,7 @@ public class PythonJavaScriptToolExecutor {
      * Pre-execution lint. NOT a security boundary.
      *
      * <p>This denylist blocks a handful of literal spellings and is trivially bypassed - see
-     * docs/00_CURRENT_STATE_AUDIT.md F-2, where 9 of 10 tested payloads passed it. It is retained
+     * docs/KNOWN_LIMITATIONS.md F-2, where 9 of 10 tested payloads passed it. It is retained
      * only as defence-in-depth: it raises the cost of a careless mistake, and it must never be the
      * reason anything is considered safe. Containment is the sandbox's job.
      */

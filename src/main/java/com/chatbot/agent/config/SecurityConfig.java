@@ -23,7 +23,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <p>Replaces a configuration in which {@code /api/**} and {@code /actuator/**} were both
  * {@code permitAll()}. That combination meant an unauthenticated caller could POST a tool
  * containing arbitrary Python to {@code /api/tools/{id}} and then execute it - see
- * {@code docs/00_CURRENT_STATE_AUDIT.md} finding F-1.
+ * {@code docs/KNOWN_LIMITATIONS.md} finding F-1.
  *
  * <h2>Authority model</h2>
  * <ul>

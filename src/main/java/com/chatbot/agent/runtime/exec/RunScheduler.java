@@ -46,7 +46,7 @@ import java.util.concurrent.TimeUnit;
  * violating that assumption fails loudly rather than corrupting a run - not because distributed
  * scheduling is implemented.
  *
- * @see <a href="../../../../../../../../docs/12_DAG_DESIGN.md">12_DAG_DESIGN.md</a>
+ * @see <a href="../../../../../../../../docs/RUNTIME_DESIGN.md">RUNTIME_DESIGN.md</a>
  */
 @Slf4j
 public class RunScheduler {

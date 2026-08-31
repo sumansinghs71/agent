@@ -2,7 +2,7 @@
 
 ## Before you start
 
-Read [docs/00_CURRENT_STATE_AUDIT.md](docs/00_CURRENT_STATE_AUDIT.md). It is the honest description
+Read [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md). It is the honest description
 of what this system does and does not do, and it is kept current.
 
 ## Ground rules
@@ -15,6 +15,19 @@ of what this system does and does not do, and it is kept current.
    necessary but not sufficient; add a test that tries the attack.
 4. **No unmeasured numbers.** Performance and evaluation claims need a committed artifact showing
    how they were produced.
+
+## Documentation hygiene
+
+The repository must read as a deliberate engineering project, not a transcript of how it was built.
+
+- **Canonical documents are the only home for enduring information.** Milestone notes, plans,
+  progress summaries and checklists are transient; fold what lasts into the canonical set and delete
+  the rest. Git history preserves what was removed.
+- **Do not keep two documents explaining the same thing.** Consolidate.
+- **Evidence documents state outcomes, not chronology.** Problem, method, experiment, observed
+  result, limitation, reproduction. No build-session narration.
+- **Never leave `-old`, `-v2`, `-final` variants.**
+- `tools/check-docs.py` enforces links, anchors and the no-narration rule, and runs in CI.
 
 ## Definition of done
 

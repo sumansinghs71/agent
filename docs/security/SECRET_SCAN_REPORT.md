@@ -79,7 +79,7 @@ gitleaks detect --no-git --source .
 ## 4. Results — git history
 
 **4 findings across 23 commits.** Not remediated; remediation requires history rewrite (see
-[GIT_HISTORY_PURGE_PLAN.md](GIT_HISTORY_PURGE_PLAN.md)) which is **pending owner approval**.
+[GIT_HISTORY_PURGE_RESULT.md](GIT_HISTORY_PURGE_RESULT.md)) which is **pending owner approval**.
 
 | Secret | Commits | File |
 |---|---|---|

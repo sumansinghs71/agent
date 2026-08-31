@@ -12,7 +12,7 @@ as a laboratory, not a product.
 ## Reporting a vulnerability
 
 Open a GitHub issue for anything already public (such as an item in
-[docs/00_CURRENT_STATE_AUDIT.md](docs/00_CURRENT_STATE_AUDIT.md)).
+[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)).
 
 For anything not yet public, please use GitHub's **private vulnerability reporting** on this
 repository rather than a public issue.
@@ -27,7 +27,7 @@ commit:
 
 Both were identified in the M0 audit, **have been removed from the working tree**, and have been
 rotated by the repository owner. They remain present in git history pending an approved history
-rewrite — see [docs/security/GIT_HISTORY_PURGE_PLAN.md](docs/security/GIT_HISTORY_PURGE_PLAN.md).
+rewrite — see [docs/security/GIT_HISTORY_PURGE_RESULT.md](docs/security/GIT_HISTORY_PURGE_RESULT.md).
 
 This is documented rather than quietly scrubbed, for two reasons. Rotation, not history rewriting,
 is what actually closed the exposure — the values were public and must be assumed harvested. And

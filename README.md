@@ -1,7 +1,7 @@
 # Agent Runtime Lab
 
 *(working name; the Maven artifact and GitHub repository still use `hybrid-chatbot` / `agent` — see
-[docs/00_CURRENT_STATE_AUDIT.md](docs/00_CURRENT_STATE_AUDIT.md) §11)*
+[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) §11)*
 
 A Spring Boot agent runtime that routes a user query to tools, documents, or both, executes SQL /
 REST / Python / JavaScript tools behind a runtime authority gate, and runs untrusted Python inside a
@@ -140,16 +140,16 @@ Stated plainly, because a security posture you cannot describe is one you do not
 
 | Document | Contents |
 |---|---|
-| [00_CURRENT_STATE_AUDIT.md](docs/00_CURRENT_STATE_AUDIT.md) | Full forensic audit: every component, every gap, source references |
-| [00_M0_SECURITY_COMPLETION_REPORT.md](docs/00_M0_SECURITY_COMPLETION_REPORT.md) | What M0 changed, with evidence |
-| [METRICS.md](METRICS.md) | Every claim mapped to a command, an artifact, and an observed result |
-| [16_DURABLE_RUNTIME_RESULTS.md](docs/16_DURABLE_RUNTIME_RESULTS.md) | M2 results, and what M2 does not do |
-| [11–15](docs/) | Durable-runtime PRD, DAG design, state machine, failure recovery, idempotency model |
-| [SECRET_SCAN_REPORT.md](docs/security/SECRET_SCAN_REPORT.md) | Scanner, commands, findings, disposition |
-| [GIT_HISTORY_PURGE_PLAN.md](docs/security/GIT_HISTORY_PURGE_PLAN.md) | History rewrite plan — prepared, not executed |
-| [SANDBOX_SECURITY_REPORT.md](docs/security/SANDBOX_SECURITY_REPORT.md) | Attack matrix: expected vs observed, per attack |
-| [docs/ADR/](docs/ADR/) | Architecture decision records |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, authority model, isolation, the request path |
+| [RUNTIME_DESIGN.md](docs/RUNTIME_DESIGN.md) | Execution graph, node lifecycle, scheduling, storage |
+| [FAILURE_RECOVERY.md](docs/FAILURE_RECOVERY.md) | Failure classification, retry, crash recovery, idempotency |
+| [TOOL_AND_MCP.md](docs/TOOL_AND_MCP.md) | Tool contract and authoring |
+| [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | What this system does not do |
+| [METRICS.md](METRICS.md) | Every claim mapped to a command, artifact and observed result |
 | [SECURITY.md](SECURITY.md) | Threat posture, disclosed incident, reporting |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+| [docs/results/](docs/results/) | Measured outcomes |
+| [docs/security/](docs/security/) | Sandbox attack matrix, secret scan, history purge result |
 
 ## License
 

@@ -23,7 +23,7 @@ import java.util.Set;
  * <p>Node ordering is preserved and deterministic throughout. Two runs of the same plan schedule
  * identically; without that, a failure that depends on ordering is irreproducible.
  *
- * @see <a href="../../../../../../../../docs/12_DAG_DESIGN.md">12_DAG_DESIGN.md</a>
+ * @see <a href="../../../../../../../../docs/RUNTIME_DESIGN.md">RUNTIME_DESIGN.md</a>
  */
 public final class ExecutionGraph {
 

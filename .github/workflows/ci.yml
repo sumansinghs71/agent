@@ -121,8 +121,11 @@ jobs:
 
       # Docs in this repository link to the code that backs each claim. A broken link is the first
       # visible symptom of documentation drifting away from the implementation, so it fails the build.
-      - name: Documentation links resolve
-        run: python3 tools/check-doc-links.py
+      # Fails on broken links, broken anchors, and build-session narration. Docs here link to the
+      # code backing each claim, so a broken link is the first visible symptom of documentation
+      # drifting from the implementation.
+      - name: Documentation quality gate
+        run: python3 tools/check-docs.py
 
   dependency-scan:
     name: Dependency vulnerabilities

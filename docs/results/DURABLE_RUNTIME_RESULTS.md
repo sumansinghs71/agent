@@ -1,7 +1,6 @@
-# 16 — Durable Runtime: Results
+# Durable Runtime: Results
 
-**Milestone:** M2 · **Date:** 2026-08-30
-**Status:** delivered, including the scheduler and end-to-end crash/resume
+**Verified:** 2026-08-31 · **Component:** durable execution runtime
 
 ---
 
@@ -9,14 +8,14 @@
 
 | Component | File | Tests |
 |---|---|---|
-| Node state machine | [`NodeState`](../src/main/java/com/chatbot/agent/runtime/state/NodeState.java) | 26 |
-| Execution graph + validation | [`ExecutionGraph`](../src/main/java/com/chatbot/agent/runtime/graph/ExecutionGraph.java) | 16 |
-| Retry policy | [`RetryPolicy`](../src/main/java/com/chatbot/agent/runtime/model/RetryPolicy.java) | 7 |
-| Durable persistence | [`RunRepository`](../src/main/java/com/chatbot/agent/runtime/persistence/RunRepository.java) | 20 |
-| Schema | [`V1__agent_runtime.sql`](../src/main/resources/db/migration/V1__agent_runtime.sql) | via the above |
-| Scheduler | [`RunScheduler`](../src/main/java/com/chatbot/agent/runtime/exec/RunScheduler.java) | 14 (end-to-end) |
-| Run service | [`AgentRunService`](../src/main/java/com/chatbot/agent/runtime/exec/AgentRunService.java) | via the above |
-| Plan serialisation | [`GraphCodec`](../src/main/java/com/chatbot/agent/runtime/exec/GraphCodec.java) | via the above |
+| Node state machine | [`NodeState`](../../src/main/java/com/chatbot/agent/runtime/state/NodeState.java) | 26 |
+| Execution graph + validation | [`ExecutionGraph`](../../src/main/java/com/chatbot/agent/runtime/graph/ExecutionGraph.java) | 16 |
+| Retry policy | [`RetryPolicy`](../../src/main/java/com/chatbot/agent/runtime/model/RetryPolicy.java) | 7 |
+| Durable persistence | [`RunRepository`](../../src/main/java/com/chatbot/agent/runtime/persistence/RunRepository.java) | 20 |
+| Schema | [`V1__agent_runtime.sql`](../../src/main/resources/db/migration/V1__agent_runtime.sql) | via the above |
+| Scheduler | [`RunScheduler`](../../src/main/java/com/chatbot/agent/runtime/exec/RunScheduler.java) | 14 (end-to-end) |
+| Run service | [`AgentRunService`](../../src/main/java/com/chatbot/agent/runtime/exec/AgentRunService.java) | via the above |
+| Plan serialisation | [`GraphCodec`](../../src/main/java/com/chatbot/agent/runtime/exec/GraphCodec.java) | via the above |
 
 **83 new tests. Total suite: 196, 0 failures, 0 errors.**
 
@@ -135,11 +134,7 @@ Verified end to end against real PostgreSQL:
 | Cancellation | completed work is not undone; outstanding nodes go CANCELLED, distinct from SKIPPED |
 | Plan durability | the graph round-trips through storage and rebuilds with side-effect classes and keys intact |
 
-Two of these tests initially failed, and both were defects in the **test harness**, not the
-scheduler: `tick()` promotes and executes in a single pass, so the node completed before there was
-any in-flight work to abandon. The simulations now drive the promote/claim/abandon sequence directly.
-
-## 5.1 What is still NOT done
+## 5.1 Out of scope
 
 - **`ReasoningAgentService` still executes tools directly**, not as graph nodes. The runtime exists
   and is tested; the agent has not yet been rebuilt on top of it. That integration is M3 work,
@@ -155,7 +150,7 @@ any in-flight work to abandon. The simulations now drive the promote/claim/aband
 - **Flyway auto-configuration is disabled** (several DataSources, no primary); the runtime schema is
   applied explicitly. A dedicated runtime `DataSource` bean comes with the M3 integration.
 - **Exactly-once side effects** — not achievable, not claimed. See
-  [`15_IDEMPOTENCY_MODEL.md`](15_IDEMPOTENCY_MODEL.md) §4.
+  [`FAILURE_RECOVERY.md`](../FAILURE_RECOVERY.md) §4.
 
 ## 6. Reproduction
 

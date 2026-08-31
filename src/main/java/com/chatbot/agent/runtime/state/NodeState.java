@@ -9,7 +9,7 @@ import java.util.Set;
  * <p>The legal transitions are declared here and nowhere else. A state machine whose rules live in
  * scattered {@code if} statements is not a state machine; it is a set of conventions that drift.
  *
- * @see <a href="../../../../../../../../docs/13_STATE_MACHINE.md">13_STATE_MACHINE.md</a>
+ * @see <a href="../../../../../../../../docs/RUNTIME_DESIGN.md">RUNTIME_DESIGN.md</a>
  */
 public enum NodeState {
 

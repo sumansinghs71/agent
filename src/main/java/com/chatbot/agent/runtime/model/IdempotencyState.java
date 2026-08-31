@@ -1,6 +1,6 @@
 package com.chatbot.agent.runtime.model;
 
-/** Lifecycle of an idempotency record. See docs/15_IDEMPOTENCY_MODEL.md. */
+/** Lifecycle of an idempotency record. See docs/FAILURE_RECOVERY.md. */
 public enum IdempotencyState {
 
     /**
