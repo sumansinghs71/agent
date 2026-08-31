@@ -30,12 +30,19 @@ unauthenticated caller to POST a tool containing arbitrary Python and then execu
 | SSRF | string matching; cloud metadata reachable | resolve-and-inspect; allowlist enforced on label boundaries |
 | HTTP read timeout | commented out | set, alongside connect and pool timeouts |
 | Secrets | 2 credentials in tracked files | none in the tree; `gitleaks` gates CI |
-| Tests | 17 | 96 |
+| Durable state | none — lost on process exit | PostgreSQL-backed runs, nodes, attempts, checkpoints |
+| DAG execution | none, despite the branch name | validated graph, scheduler, crash/resume |
+| Tests | 17 | 196 |
 | Spring context test | commented out | present — and it immediately found a config bug that stopped the app booting |
 
-**Not built yet** (despite the branch being called `DAG`): DAG execution, durable state, checkpoint
-and resume, MCP, human approval, evaluation harness, failure injection, multi-agent, tracing,
-benchmarks. The audit documents each absence.
+**M2 (durable runtime) is complete.** Runs are persisted before execution, nodes are claimed by
+conditional update, and a scheduler that has just started is indistinguishable from one that has
+been running for an hour — because neither holds anything the other lacks. A run abandoned by a
+dead scheduler is completed by another without re-executing finished work.
+
+**Not built yet:** MCP, human-approval workflow, evaluation harness, failure-injection library,
+multi-agent, OpenTelemetry tracing, benchmarks. **No performance number of any kind has been
+measured** — see [METRICS.md](METRICS.md) for what is and is not evidenced.
 
 ---
 
@@ -52,8 +59,11 @@ Each claim links to the code and the test that holds it up.
 | HTTP authentication and role separation | [`SecurityConfig`](src/main/java/com/chatbot/agent/config/SecurityConfig.java) | `ApiSecurityTest` (9) |
 | Header allowlist and CRLF rejection | [`RestHeaderPolicy`](src/main/java/com/chatbot/agent/service/policy/RestHeaderPolicy.java) | `RestHeaderPolicyTest` (6) |
 | Watchdog termination of hung code execution | [`PythonJavaScriptToolExecutor`](src/main/java/com/chatbot/agent/service/tools/PythonJavaScriptToolExecutor.java) | `PythonSandboxTimeoutTest` (5) |
-| Inter-tool calls with cycle, depth and budget limits | [`ExecutionContext`](src/main/java/com/chatbot/agent/service/tools/ExecutionContext.java) | partial — M2 |
-| Parameterised SQL (values are JDBC-bound, never concatenated) | [`ToolExecutionService`](src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java) | needs a negative test — M2 |
+| Durable DAG execution with crash/resume | [`RunScheduler`](src/main/java/com/chatbot/agent/runtime/exec/RunScheduler.java) | `EndToEndRunTest` (14, real PostgreSQL) |
+| Node lifecycle with illegal transitions rejected | [`NodeState`](src/main/java/com/chatbot/agent/runtime/state/NodeState.java) | `NodeStateMachineTest` (26) |
+| Cycle detection, deterministic scheduling | [`ExecutionGraph`](src/main/java/com/chatbot/agent/runtime/graph/ExecutionGraph.java) | `ExecutionGraphTest` (16) |
+| Optimistic locking, leases, idempotency records | [`RunRepository`](src/main/java/com/chatbot/agent/runtime/persistence/RunRepository.java) | `DurableRuntimeTest` (20, real PostgreSQL) |
+| Parameterised SQL (values are JDBC-bound, never concatenated) | [`ToolExecutionService`](src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java) | needs a negative test — M3 |
 
 ---
 
@@ -111,7 +121,16 @@ Stated plainly, because a security posture you cannot describe is one you do not
   unchecked. The authority gate limits the damage; it does not stop the injection.
 - **JavaScript has no resource limits.** GraalJS is contained against host access (verified), but a
   tight loop holds a thread-pool slot until the JVM restarts.
-- **No durable state.** Everything is lost on process exit.
+- **The agent is not yet built on the runtime.** `ReasoningAgentService` still executes tools
+  directly rather than as graph nodes. The durable runtime exists and is tested; the integration is
+  M3.
+- **Approval is a state, not a workflow.** `WAITING_APPROVAL` and its table exist; nothing requests
+  or grants an approval yet.
+- **Crash is simulated by lease expiry, not by killing a JVM.** What is proven is that a scheduler
+  observing an expired lease recovers correctly and does not repeat completed effects.
+- **Single scheduler.** Optimistic locking makes violating that assumption fail loudly; it does not
+  make scheduling distributed.
+- **No measured performance.** No benchmark has been run.
 - **Credentials remain in git history** pending an approved rewrite. They have been rotated; see
   [SECURITY.md](SECURITY.md).
 
@@ -123,6 +142,9 @@ Stated plainly, because a security posture you cannot describe is one you do not
 |---|---|
 | [00_CURRENT_STATE_AUDIT.md](docs/00_CURRENT_STATE_AUDIT.md) | Full forensic audit: every component, every gap, source references |
 | [00_M0_SECURITY_COMPLETION_REPORT.md](docs/00_M0_SECURITY_COMPLETION_REPORT.md) | What M0 changed, with evidence |
+| [METRICS.md](METRICS.md) | Every claim mapped to a command, an artifact, and an observed result |
+| [16_DURABLE_RUNTIME_RESULTS.md](docs/16_DURABLE_RUNTIME_RESULTS.md) | M2 results, and what M2 does not do |
+| [11–15](docs/) | Durable-runtime PRD, DAG design, state machine, failure recovery, idempotency model |
 | [SECRET_SCAN_REPORT.md](docs/security/SECRET_SCAN_REPORT.md) | Scanner, commands, findings, disposition |
 | [GIT_HISTORY_PURGE_PLAN.md](docs/security/GIT_HISTORY_PURGE_PLAN.md) | History rewrite plan — prepared, not executed |
 | [SANDBOX_SECURITY_REPORT.md](docs/security/SANDBOX_SECURITY_REPORT.md) | Attack matrix: expected vs observed, per attack |
