@@ -62,6 +62,8 @@ jobs:
           }
           check_suite com.chatbot.agent.runtime.persistence.DurableRuntimeTest 15
           check_suite com.chatbot.agent.runtime.exec.EndToEndRunTest 12
+          check_suite com.chatbot.agent.runtime.approval.ApprovalWorkflowTest 8
+          check_suite com.chatbot.agent.runtime.plan.PlannerToRuntimeTest 12
           check_suite com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest 12
 
       - name: Coverage report

@@ -3,7 +3,7 @@
 Every substantive claim made about this repository maps to a command you can run and an artifact you
 can inspect. **No number in this file was estimated, projected, or written before it was observed.**
 
-Last verified: 2026-08-31, commit `8d0832b`, on `DAG`.
+Last verified: 2026-08-31, on `DAG`.
 
 ## How to reproduce everything
 
@@ -58,18 +58,40 @@ no suite.
 | Fan-in runs exactly once | attempts | same | same | **1** |
 | Dependents of a terminal failure are skipped | node state | same | same | **SKIPPED, never executed** |
 
+## Typed tools, MCP and approval
+
+| Claim | Metric | Command | Artifact | Observed |
+|---|---|---|---|---|
+| Model-proposed work executes only as durable runtime nodes | durable rows + events | `-Dtest=PlannerToRuntimeTest` | `PlannerToRuntimeTest` | `RUN_CREATED`, `NODE_CLAIMED`, `NODE_SUCCEEDED` |
+| An unauthorised step rejects the whole plan | invocations | same | same | **0 invocations** |
+| Wrong argument types are rejected before execution | plan outcome | same | same | **rejected** |
+| A cross-tenant tool is invisible | denial reason | same | same | `UNKNOWN_TOOL` |
+| A cyclic proposal is refused | exception | same | same | **refused at construction** |
+| MCP handshake, discovery and invocation work | protocol exchange | `-Dtest=McpIntegrationTest` | `McpIntegrationTest` | **13/13 pass** |
+| An MCP tool failure is raised, not returned as data | exception | same | same | **raised** |
+| An unavailable MCP server fails fast | elapsed | same | same | **< 5s** |
+| An unclassified MCP tool defaults to PRIVILEGED | side-effect class | same | same | `PRIVILEGED` |
+| Irreversible actions are gated before their effect | effect count | `-Dtest=ApprovalWorkflowTest` | `ApprovalWorkflowTest` | **0 effects while pending** |
+| Four-eye blocks self-approval | decision | same | same | **refused** |
+| An expired approval cannot be granted | decision | same | same | **refused** |
+| A run waiting on approval survives restart | run status | same | same | **completed by a different scheduler** |
+
 ## Build, tests, coverage
 
 | Metric | Command | Observed |
 |---|---|---|
-| Total tests | `./mvnw clean verify` | **196, 0 failures, 0 errors** |
-| Coverage, overall | JaCoCo | **34.5%** |
+| Total tests | `./mvnw clean verify` | **246, 0 failures, 0 errors** |
+| Coverage, overall | JaCoCo | **40.4%** |
 | Coverage, `runtime.model` | JaCoCo | **100.0%** |
 | Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
 | Coverage, `runtime.state` | JaCoCo | **97.7%** |
 | Coverage, `runtime.graph` | JaCoCo | **91.3%** |
 | Coverage, `runtime.exec` | JaCoCo | **89.9%** |
 | Coverage, `service.policy` | JaCoCo | **89.9%** |
+| Coverage, `runtime.approval` | JaCoCo | **93.3%** |
+| Coverage, `runtime.plan` | JaCoCo | **92.6%** |
+| Coverage, `tools.mcp` | JaCoCo | **91.3%** |
+| Coverage, `tools.registry` | JaCoCo | **82.3%** |
 | Coverage, `service.tools.sandbox` | JaCoCo | **82.4%** |
 | SBOM components | CycloneDX | **207** |
 
@@ -81,6 +103,8 @@ still barely tested**. That is not hidden by quoting only the good packages: bot
 `agent.run.*`, `agent.node.duration`, `agent.node.<outcome>`, `agent.node.retry`,
 `agent.run.resume`, `agent.checkpoint.write`, `agent.checkpoint.duration`,
 `agent.scheduler.active`, `agent.scheduler.queue`, `tool.policy.decision`,
+`tool.invocation`, `tool.schema.invalid`, `approval.requested`, `approval.approved`,
+`approval.rejected`, `approval.expired`, `mcp.connection`, `mcp.discovery`, `mcp.tool.invocation`,
 `tool.execution`, `tool.execution.error`, `tool.sandbox.killed`, `guardrail.violation`.
 
 `agent.node.duration` is deliberately not tagged by node id — ids are caller-supplied and unbounded.
@@ -95,8 +119,8 @@ capability claim anywhere in this repository.
 
 | Not claimed | Why |
 |---|---|
-| MCP integration | Not implemented (M3) |
-| Human approval workflow | The state exists; nothing requests or grants one (M3) |
+| Reasoning service migrated onto the runtime | `RuntimeBackedAgentService` is the supported path and is tested; the legacy reasoning service still calls the tool executor directly |
+| MCP over stdio | The protocol layer is real and tested over an in-process transport; an out-of-process transport is not implemented |
 | Retrieval Recall@K / MRR / NDCG | No golden dataset yet (M5) |
 | Single-agent vs multi-agent ablation | Multi-agent not implemented (M7) |
 | Any latency or throughput figure | **No benchmark has been run.** No p50/p95/p99 exists (M6) |

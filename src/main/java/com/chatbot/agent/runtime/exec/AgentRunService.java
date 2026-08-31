@@ -39,7 +39,19 @@ public class AgentRunService {
     public UUID createRun(ExecutionGraph graph, InvocationPrincipal principal,
                           DependencyFailurePolicy failurePolicy, int retryBudget,
                           Instant deadlineAt) {
-        UUID runId = UUID.randomUUID();
+        return createRun(UUID.randomUUID(), graph, principal, failurePolicy, retryBudget, deadlineAt);
+    }
+
+    /**
+     * Create a run under a caller-supplied id.
+     *
+     * <p>Used by the planner, which fixes the run id before compiling the graph because idempotency
+     * keys are derived from it. A key computed against a different id than the run it belongs to
+     * would fail to deduplicate the retry it exists to protect.
+     */
+    public UUID createRun(UUID runId, ExecutionGraph graph, InvocationPrincipal principal,
+                          DependencyFailurePolicy failurePolicy, int retryBudget,
+                          Instant deadlineAt) {
 
         repo.insertRun(runId, principal.getName(), String.join(",", principal.getRoles()),
                 codec.encode(graph), failurePolicy.name(), retryBudget, deadlineAt);

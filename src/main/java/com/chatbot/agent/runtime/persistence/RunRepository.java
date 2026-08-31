@@ -55,6 +55,12 @@ public class RunRepository {
         return jdbc.queryForObject("SELECT version FROM agent_run WHERE id = ?", Long.class, runId);
     }
 
+    /** The principal a run was created for. Used as the requester on approval requests. */
+    public String runPrincipal(UUID runId) {
+        return jdbc.queryForObject("SELECT principal_name FROM agent_run WHERE id = ?",
+                String.class, runId);
+    }
+
     public String graphJson(UUID runId) {
         return jdbc.queryForObject("SELECT graph_json FROM agent_run WHERE id = ?", String.class, runId);
     }

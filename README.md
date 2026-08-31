@@ -32,7 +32,10 @@ unauthenticated caller to POST a tool containing arbitrary Python and then execu
 | Secrets | 2 credentials in tracked files | none in the tree; `gitleaks` gates CI |
 | Durable state | none — lost on process exit | PostgreSQL-backed runs, nodes, attempts, checkpoints |
 | DAG execution | none, despite the branch name | validated graph, scheduler, crash/resume |
-| Tests | 17 | 196 |
+| Typed tool contract | none | JSON Schema in and out, side effects, approval policy |
+| MCP | none | client, discovery, invocation, demo server |
+| Human approval | none | durable, four-eye, expiring, survives restart |
+| Tests | 17 | 246 |
 | Spring context test | commented out | present — and it immediately found a config bug that stopped the app booting |
 
 **M2 (durable runtime) is complete.** Runs are persisted before execution, nodes are claimed by
@@ -40,9 +43,14 @@ conditional update, and a scheduler that has just started is indistinguishable f
 been running for an hour — because neither holds anything the other lacks. A run abandoned by a
 dead scheduler is completed by another without re-executing finished work.
 
-**Not built yet:** MCP, human-approval workflow, evaluation harness, failure-injection library,
-multi-agent, OpenTelemetry tracing, benchmarks. **No performance number of any kind has been
-measured** — see [METRICS.md](METRICS.md) for what is and is not evidenced.
+**M3 (typed tools, MCP, approvals) is complete.** Model-proposed work is compiled into a validated
+graph the runtime owns; one unauthorised step rejects the whole plan. MCP is the real protocol, not
+a custom JSON API given the name.
+
+**Not built yet:** evaluation harness, failure-injection library, multi-agent, OpenTelemetry
+tracing, benchmarks. **No performance number of any kind has been measured** — see
+[METRICS.md](METRICS.md) for what is and is not evidenced, and
+[KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what is only partially done.
 
 ---
 
@@ -63,7 +71,10 @@ Each claim links to the code and the test that holds it up.
 | Node lifecycle with illegal transitions rejected | [`NodeState`](src/main/java/com/chatbot/agent/runtime/state/NodeState.java) | `NodeStateMachineTest` (26) |
 | Cycle detection, deterministic scheduling | [`ExecutionGraph`](src/main/java/com/chatbot/agent/runtime/graph/ExecutionGraph.java) | `ExecutionGraphTest` (16) |
 | Optimistic locking, leases, idempotency records | [`RunRepository`](src/main/java/com/chatbot/agent/runtime/persistence/RunRepository.java) | `DurableRuntimeTest` (20, real PostgreSQL) |
-| Parameterised SQL (values are JDBC-bound, never concatenated) | [`ToolExecutionService`](src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java) | needs a negative test — M3 |
+| Model proposals compiled into runtime graphs | [`AgentPlanner`](src/main/java/com/chatbot/agent/runtime/plan/AgentPlanner.java) | `PlannerToRuntimeTest` (15, real PostgreSQL) |
+| MCP client, discovery and invocation | [`McpClient`](src/main/java/com/chatbot/agent/tools/mcp/McpClient.java) | `McpIntegrationTest` (13, against a demo server) |
+| Durable human approval with four-eye and expiry | [`ApprovalService`](src/main/java/com/chatbot/agent/runtime/approval/ApprovalService.java) | `ApprovalWorkflowTest` (10, real PostgreSQL) |
+| Parameterised SQL (values are JDBC-bound, never concatenated) | [`ToolExecutionService`](src/main/java/com/chatbot/agent/service/tools/ToolExecutionService.java) | needs a negative test |
 
 ---
 
@@ -121,11 +132,10 @@ Stated plainly, because a security posture you cannot describe is one you do not
   unchecked. The authority gate limits the damage; it does not stop the injection.
 - **JavaScript has no resource limits.** GraalJS is contained against host access (verified), but a
   tight loop holds a thread-pool slot until the JVM restarts.
-- **The agent is not yet built on the runtime.** `ReasoningAgentService` still executes tools
-  directly rather than as graph nodes. The durable runtime exists and is tested; the integration is
-  M3.
-- **Approval is a state, not a workflow.** `WAITING_APPROVAL` and its table exist; nothing requests
-  or grants an approval yet.
+- **The legacy reasoning service is not yet migrated.** `RuntimeBackedAgentService` is the supported
+  path and is fully tested, but `ReasoningAgentService` still calls the tool executor directly.
+- **MCP transport is in-process.** The protocol is real and tested; stdio for out-of-process servers
+  is not implemented.
 - **Crash is simulated by lease expiry, not by killing a JVM.** What is proven is that a scheduler
   observing an expired lease recovers correctly and does not repeat completed effects.
 - **Single scheduler.** Optimistic locking makes violating that assumption fail loudly; it does not
@@ -143,7 +153,7 @@ Stated plainly, because a security posture you cannot describe is one you do not
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, authority model, isolation, the request path |
 | [RUNTIME_DESIGN.md](docs/RUNTIME_DESIGN.md) | Execution graph, node lifecycle, scheduling, storage |
 | [FAILURE_RECOVERY.md](docs/FAILURE_RECOVERY.md) | Failure classification, retry, crash recovery, idempotency |
-| [TOOL_AND_MCP.md](docs/TOOL_AND_MCP.md) | Tool contract and authoring |
+| [TOOL_AND_MCP.md](docs/TOOL_AND_MCP.md) | Tool contract, schema validation, MCP, approvals |
 | [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | What this system does not do |
 | [METRICS.md](METRICS.md) | Every claim mapped to a command, artifact and observed result |
 | [SECURITY.md](SECURITY.md) | Threat posture, disclosed incident, reporting |

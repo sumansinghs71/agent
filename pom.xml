@@ -120,6 +120,16 @@
             <artifactId>js-scriptengine</artifactId>
             <version>22.3.0</version>
         </dependency>
+        <!-- JSON Schema validation for tool inputs and outputs. Hand-rolled argument checking
+             cannot express the constraints a tool author actually needs (types, enums, ranges,
+             required combinations), and a partial validator is worse than none because it reads
+             as complete. -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.4</version>
+        </dependency>
+
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>

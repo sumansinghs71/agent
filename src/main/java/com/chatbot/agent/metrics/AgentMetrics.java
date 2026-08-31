@@ -183,6 +183,45 @@ public class AgentMetrics {
         registry.gauge("agent.scheduler.queue", queued);
     }
 
+    /**
+     * Approval lifecycle. Tagged only by outcome - never by run, node, tool or user, which are
+     * unbounded and belong in trace attributes rather than metric labels.
+     */
+    public void recordApproval(String outcome) {
+        Counter.builder("approval." + safe(outcome))
+                .description("Human approval lifecycle events")
+                .register(registry)
+                .increment();
+    }
+
+    /** Tool invocation across every protocol. */
+    public void recordToolInvocation(String protocol, String outcome) {
+        Counter.builder("tool.invocation")
+                .description("Tool invocations by protocol and outcome")
+                .tag("protocol", safe(protocol))
+                .tag("outcome", safe(outcome))
+                .register(registry)
+                .increment();
+    }
+
+    /** Schema validation failures, by which side of the contract was violated. */
+    public void recordSchemaViolation(String direction) {
+        Counter.builder("tool.schema.invalid")
+                .description("Tool schema validation failures")
+                .tag("direction", safe(direction))
+                .register(registry)
+                .increment();
+    }
+
+    /** MCP client lifecycle and invocation. */
+    public void recordMcp(String event, String outcome) {
+        Counter.builder("mcp." + safe(event))
+                .description("MCP client events")
+                .tag("outcome", safe(outcome))
+                .register(registry)
+                .increment();
+    }
+
     public void recordGuardrailViolation(String stage, String violationType, String severity) {
         Counter.builder("guardrail.violation")
                 .description("Requests blocked or flagged by guardrails")

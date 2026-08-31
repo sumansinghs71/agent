@@ -1,6 +1,9 @@
 package com.chatbot.agent.runtime.exec;
 
 import com.chatbot.agent.metrics.AgentMetrics;
+import com.chatbot.agent.runtime.approval.ApprovalRecord;
+import com.chatbot.agent.runtime.approval.ApprovalService;
+import com.chatbot.agent.runtime.approval.ApprovalState;
 import com.chatbot.agent.model.ToolModel.SideEffect;
 import com.chatbot.agent.runtime.graph.ExecutionGraph;
 import com.chatbot.agent.runtime.graph.ExecutionNode;
@@ -60,6 +63,15 @@ public class RunScheduler {
     private final int maxConcurrency;
     private final Duration leaseDuration;
 
+    /**
+     * Optional. When absent, nodes are executed without an approval gate, which is correct only for
+     * graphs containing no node that requires one - enforced by {@link #requiresApproval}.
+     */
+    private ApprovalService approvals;
+    private java.util.function.Predicate<ExecutionNode> requiresApproval = n -> false;
+    private String approverRole = "ROLE_ADMIN";
+    private boolean fourEye = false;
+
     public RunScheduler(RunRepository repo, GraphCodec codec, NodeExecutor executor,
                         ExecutorService pool, AgentMetrics metrics, String schedulerId,
                         int maxConcurrency, Duration leaseDuration) {
@@ -71,6 +83,22 @@ public class RunScheduler {
         this.schedulerId = schedulerId;
         this.maxConcurrency = maxConcurrency;
         this.leaseDuration = leaseDuration;
+    }
+
+    /**
+     * Enable the approval gate.
+     *
+     * @param approvals       durable approval store
+     * @param requiresApproval predicate over nodes, normally derived from the tool's approval policy
+     */
+    public RunScheduler withApprovals(ApprovalService approvals,
+                                      java.util.function.Predicate<ExecutionNode> requiresApproval,
+                                      String approverRole, boolean fourEye) {
+        this.approvals = approvals;
+        this.requiresApproval = requiresApproval;
+        this.approverRole = approverRole;
+        this.fourEye = fourEye;
+        return this;
     }
 
     /**
@@ -110,6 +138,7 @@ public class RunScheduler {
         progressed |= reclaimExpiredLeases(runId);
         progressed |= promoteReadyNodes(runId, graph);
         progressed |= promoteDueRetries(runId);
+        progressed |= resolveApprovals(runId, graph);
         progressed |= executeReadyNodes(runId, graph);
 
         return progressed;
@@ -263,8 +292,76 @@ public class RunScheduler {
         return true;
     }
 
+    /**
+     * Advance nodes parked on an approval.
+     *
+     * <p>An expired request is swept first, so a decision arriving after the window has closed
+     * cannot be honoured. Approving into an elapsed window would make the expiry advisory.
+     */
+    private boolean resolveApprovals(UUID runId, ExecutionGraph graph) {
+        if (approvals == null) {
+            return false;
+        }
+        approvals.expireLapsed();
+
+        boolean any = false;
+        for (NodeRecord n : repo.findNodes(runId)) {
+            if (n.state() != NodeState.WAITING_APPROVAL) {
+                continue;
+            }
+            var found = approvals.find(runId, n.nodeId());
+            if (found.isEmpty()) {
+                continue;
+            }
+            ApprovalRecord approval = found.get();
+
+            switch (approval.state()) {
+                case APPROVED -> {
+                    repo.transition(runId, n.nodeId(), NodeState.WAITING_APPROVAL, NodeState.READY,
+                            n.version());
+                    repo.recordEvent(runId, n.nodeId(), "APPROVAL_GRANTED",
+                            NodeState.WAITING_APPROVAL, NodeState.READY,
+                            "approved by " + approval.decidedBy(), approval.decidedBy());
+                    any = true;
+                }
+                case REJECTED, EXPIRED -> {
+                    repo.transition(runId, n.nodeId(), NodeState.WAITING_APPROVAL,
+                            NodeState.FAILED_TERMINAL, n.version());
+                    repo.recordEvent(runId, n.nodeId(),
+                            approval.state() == ApprovalState.REJECTED
+                                    ? "APPROVAL_REJECTED" : "APPROVAL_EXPIRED",
+                            NodeState.WAITING_APPROVAL, NodeState.FAILED_TERMINAL,
+                            approval.reason(), approval.decidedBy());
+                    skipDependents(runId, graph, n.nodeId());
+                    any = true;
+                }
+                case PENDING -> { /* still waiting; the run stays parked */ }
+            }
+        }
+        return any;
+    }
+
     private void executeOne(UUID runId, ExecutionGraph graph, ExecutionNode node, int attempt) {
         long started = System.currentTimeMillis();
+
+        // The approval gate sits BEFORE the effect. A node needing authorisation parks here, and
+        // the parked state is durable, so the run survives restart while waiting.
+        if (approvals != null && requiresApproval.test(node)
+                && approvals.find(runId, node.getId())
+                        .map(a -> a.state() == ApprovalState.PENDING).orElse(true)) {
+
+            approvals.request(runId, node.getId(), node.getToolId(),
+                    principalNameFor(runId), approverRole, fourEye, null);
+
+            NodeRecord current = repo.findNode(runId, node.getId()).orElseThrow();
+            repo.transition(runId, node.getId(), NodeState.RUNNING, NodeState.WAITING_APPROVAL,
+                    current.version());
+            repo.recordEvent(runId, node.getId(), "APPROVAL_REQUESTED",
+                    NodeState.RUNNING, NodeState.WAITING_APPROVAL,
+                    "tool " + node.getToolId() + " requires approval", schedulerId);
+            return;
+        }
+
         String key = node.getIdempotencyKey();
 
         // If this effect already completed under its key, adopt the stored result instead of
@@ -435,6 +532,15 @@ public class RunScheduler {
             }
         }
         return target;
+    }
+
+    /** The principal the run was created for, used as the approval requester. */
+    private String principalNameFor(UUID runId) {
+        try {
+            return repo.runPrincipal(runId);
+        } catch (Exception e) {
+            return "unknown";
+        }
     }
 
     private Map<String, NodeRecord> index(UUID runId) {

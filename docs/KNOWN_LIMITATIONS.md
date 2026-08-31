@@ -57,9 +57,19 @@ them. Anyone who forked or cloned before the rewrite retains the values regardle
 **Rotation is what closed the exposure. The rewrite was repository hygiene.** Detail in
 [security/GIT_HISTORY_PURGE_RESULT.md](security/GIT_HISTORY_PURGE_RESULT.md).
 
+## Partially implemented
+
+| Area | State |
+|---|---|
+| **Reasoning service on the runtime** | `RuntimeBackedAgentService` is the supported path from proposal to execution and is fully tested. The legacy `ReasoningAgentService` still calls the tool executor directly and has not been migrated onto it. |
+| **MCP** | The protocol layer is real — handshake, discovery, invocation, cancellation, error normalisation — and tested against a server implementing the JSON-RPC surface. The transport is in-process; stdio for out-of-process servers is not implemented. |
+| **Approval** | Durable, role-checked, four-eye capable, expiring, and survives restart. `ApprovalPolicy.CUSTOM` is declared but not implemented. |
+| **Output schemas** | Validation is implemented and tested; no current tool declares one. |
+| **MCP side-effect classification** | MCP carries no side-effect information, so each discovered tool must be classified by an operator or accepted as `PRIVILEGED`. |
+
 ## Not implemented
 
-MCP integration, human-approval workflow, evaluation harness, failure-injection library,
-multi-agent coordination, OpenTelemetry tracing, benchmarks.
+Evaluation harness, failure-injection library, multi-agent coordination, OpenTelemetry tracing,
+benchmarks.
 
 [../METRICS.md](../METRICS.md) states which claims are evidenced and which are not.
