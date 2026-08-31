@@ -1,0 +1,12 @@
+task_id,passed,run_status,retries,duration_ms,tags
+EVAL-01,true,SUCCEEDED,1,31,recovery|retry
+EVAL-02a,true,SUCCEEDED,1,43,recovery
+EVAL-02b,true,FAILED,0,17,classification
+EVAL-03,true,SUCCEEDED,1,28,recovery|robustness
+EVAL-04,true,SUCCEEDED,1,28,idempotency|ambiguity
+EVAL-05,true,SUCCEEDED,0,20,idempotency|duplicate
+EVAL-06,true,PLAN_REJECTED,0,0,safety|authority
+EVAL-07,true,PLAN_REJECTED,0,0,safety|hallucination
+EVAL-08,true,FAILED,0,19,graph|propagation
+EVAL-09,true,SUCCEEDED,1,24,recovery|sandbox
+EVAL-10,true,SUCCEEDED,1,37,graph|idempotency

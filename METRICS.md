@@ -81,12 +81,24 @@ no suite.
 | An expired approval cannot be granted | decision | same | same | **refused** |
 | A run waiting on approval survives restart | run status | same | same | **completed by a different scheduler** |
 
+## Evaluation and failure injection
+
+| Claim | Metric | Command | Artifact | Observed |
+|---|---|---|---|---|
+| The runtime recovers from injected transient failures | pass rate | `./mvnw test -Dtest=EvalSuiteTest` | `evals/results/summary.json` | **11/11 scenarios, 6 retries** |
+| A retryable failure is retried; a 401 is not | retry count | same | `evals/results/metrics.csv` | 500 -> retried; 401 -> **0 retries** |
+| An ambiguous timeout does not double a keyed effect | effect count | same | `evals/results/runs.jsonl` | **1 effect** |
+| Duplicate delivery produces one durable success | effect count | same | same | **1 effect** |
+| A terminal failure skips dependents | dependent effects | same | same | **0 effects** |
+| A fan-in node runs once despite an upstream retry | effect count | same | same | **1 effect** |
+| The eval harness itself detects defects | negative controls | same | `EvalSuiteTest` NEG-01/NEG-02 | **both fail as required** |
+
 ## Build, tests, coverage
 
 | Metric | Command | Observed |
 |---|---|---|
-| Total tests | `./mvnw clean verify` | **263, 0 failures, 0 errors** |
-| Coverage, overall | JaCoCo | **41.7%** |
+| Total tests | `./mvnw clean verify` | **275, 0 failures, 0 errors** |
+| Coverage, overall | JaCoCo | **42.9%** |
 | Coverage, `runtime.model` | JaCoCo | **100.0%** |
 | Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
 | Coverage, `runtime.state` | JaCoCo | **97.7%** |
