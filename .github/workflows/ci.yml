@@ -32,8 +32,26 @@ jobs:
 
       # Unit + Spring context tests. The Docker adversarial suite is @EnabledIf(dockerAvailable)
       # and runs in security.yml, where the daemon is guaranteed and the runtime budget is larger.
+      - name: Pull test images
+        run: |
+          docker pull postgres:16-alpine
+          docker pull python:3.11-slim
+
       - name: Test
         run: ./mvnw -B -ntp verify
+
+      # The durable-runtime and sandbox suites are @EnabledIf(dockerAvailable) and would SKIP
+      # silently on a runner without a daemon, reporting green while verifying nothing.
+      - name: Fail if the container-backed suites did not actually run
+        run: |
+          for suite in \
+            com.chatbot.agent.runtime.persistence.DurableRuntimeTest \
+            com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest ; do
+            report="target/surefire-reports/${suite}.txt"
+            test -f "$report" || { echo "MISSING: $suite did not run"; exit 1; }
+            grep -q "Tests run: 0" "$report" && { echo "SKIPPED: $suite ran zero tests"; cat "$report"; exit 1; }
+            echo "ok: $suite"
+          done
 
       - name: Coverage report
         run: ./mvnw -B -ntp jacoco:report

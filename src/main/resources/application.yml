@@ -2,6 +2,16 @@ server:
   port: 8080
 
 spring:
+  # Flyway auto-configuration is OFF deliberately.
+  #
+  # This application defines several named DataSources (mysqlDataSource, pgVectorDataSource) and no
+  # primary one, so Boot cannot infer which database the migrations belong to - and guessing would
+  # be worse than failing. The M2 runtime schema (db/migration) targets the runtime PostgreSQL
+  # database specifically and is applied explicitly against that DataSource, not against whichever
+  # bean happens to win auto-configuration.
+  flyway:
+    enabled: false
+
   datasource:
     url: ${APP_DB_URL:jdbc:mysql://localhost:3306/chatbot_db?useSSL=false&allowPublicKeyRetrieval=true}
     username: ${APP_DB_USERNAME:}

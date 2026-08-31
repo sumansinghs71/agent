@@ -122,6 +122,67 @@ public class AgentMetrics {
                 .increment();
     }
 
+    // ---------------------------------------------------------------------------
+    // Durable runtime (M2)
+    // ---------------------------------------------------------------------------
+
+    /** Run lifecycle. `outcome` is a RunStatus name, so the tag set is closed and bounded. */
+    public void recordRunTransition(String event, String outcome) {
+        Counter.builder("agent.run." + safe(event))
+                .description("Agent run lifecycle transitions")
+                .tag("outcome", safe(outcome))
+                .register(registry)
+                .increment();
+    }
+
+    /** Node lifecycle plus how long the node took. */
+    public void recordNodeCompletion(String nodeId, String outcome, long durationMs) {
+        Timer.builder("agent.node.duration")
+                .description("Time from node claim to terminal state")
+                // Deliberately NOT tagged by nodeId: node ids are caller-supplied and unbounded,
+                // which would make cardinality grow without limit. The run event log carries the
+                // per-node detail; metrics carry the aggregate.
+                .tag("outcome", safe(outcome))
+                .register(registry)
+                .record(durationMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+        Counter.builder("agent.node." + safe(outcome))
+                .description("Agent node terminal outcomes")
+                .register(registry)
+                .increment();
+    }
+
+    public void recordNodeRetry(String errorClass) {
+        Counter.builder("agent.node.retry")
+                .description("Node retries, by failure classification")
+                .tag("error_class", safe(errorClass))
+                .register(registry)
+                .increment();
+    }
+
+    /** A run reclaimed after a scheduler died holding its lease. */
+    public void recordRunResume(String reason) {
+        Counter.builder("agent.run.resume")
+                .description("Runs resumed from durable state")
+                .tag("reason", safe(reason))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordCheckpointWrite(long durationMs) {
+        Timer.builder("agent.checkpoint.duration")
+                .description("Checkpoint write latency")
+                .register(registry)
+                .record(durationMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        Counter.builder("agent.checkpoint.write").register(registry).increment();
+    }
+
+    /** Scheduler saturation: how many nodes are executing right now. */
+    public void recordSchedulerActive(int active, int queued) {
+        registry.gauge("agent.scheduler.active", active);
+        registry.gauge("agent.scheduler.queue", queued);
+    }
+
     public void recordGuardrailViolation(String stage, String violationType, String severity) {
         Counter.builder("guardrail.violation")
                 .description("Requests blocked or flagged by guardrails")

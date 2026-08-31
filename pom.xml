@@ -155,6 +155,35 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Testcontainers: durable-runtime tests run against real PostgreSQL. An in-memory
+             substitute cannot exercise the behaviour that matters here - row locking, optimistic
+             concurrency, transaction boundaries and crash-recovery semantics are exactly what an
+             H2 emulation gets wrong. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Schema migrations for the runtime tables -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+
         <!-- In-memory database so the Spring context can start in CI without a real server -->
         <dependency>
             <groupId>com.h2database</groupId>
