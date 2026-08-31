@@ -40,8 +40,21 @@ public class PythonProtocolHandler {
     private final ObjectMapper jsonMapper;
     private final ToolExecutionProperties config;
 
-    private final ExecutorService readerThread;
+    private final ExecutorService stderrDrainer;
+    private final StringBuffer stderrBuffer = new StringBuffer();
     private final long startTime;
+
+    /**
+     * Cap total stdout. Output travels over a pipe into this JVM's heap, so a tool that prints in a
+     * loop is a memory-exhaustion vector against the host process even when the container itself is
+     * memory-capped. The container limit bounds the tool; this bounds us.
+     */
+    private static final long MAX_STDOUT_CHARS = 8L * 1024 * 1024;
+
+    private long stdoutCharsRead = 0;
+
+    /** Cap retained stderr so a noisy tool cannot exhaust heap. */
+    private static final int MAX_STDERR_CHARS = 64_000;
 
     public PythonProtocolHandler(
             Process process,
@@ -62,10 +75,57 @@ public class PythonProtocolHandler {
 
         this.jsonMapper = new ObjectMapper();
 
-        this.readerThread = Executors.newSingleThreadExecutor();
         this.startTime = System.currentTimeMillis();
 
+        // Drain stderr continuously on its own thread.
+        // Previously stderr was only read at EOF, so a tool writing more than the OS pipe buffer
+        // (typically 64KB) would block on write while we blocked reading stdout - a deadlock that
+        // no timeout could break.
+        this.stderrDrainer = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "eztool-stderr-" + context.getExecutionId());
+            t.setDaemon(true);
+            return t;
+        });
+        this.stderrDrainer.submit(this::drainStderr);
+
         log.debug("[executionId={}] PythonProtocolHandler initialized", context.getExecutionId());
+    }
+
+    /**
+     * Read one stdout line, enforcing the total output budget.
+     *
+     * @throws ToolExecutionException once the budget is exceeded, which unwinds the protocol loop
+     *         and lets the caller kill the sandbox
+     */
+    private String readStdoutLine() throws java.io.IOException {
+        String line = stdout.readLine();
+        if (line == null) {
+            return null;
+        }
+        stdoutCharsRead += line.length() + 1;
+        if (stdoutCharsRead > MAX_STDOUT_CHARS) {
+            log.error("[executionId={}] Tool exceeded stdout budget ({} chars); terminating",
+                    context.getExecutionId(), MAX_STDOUT_CHARS);
+            throw new com.chatbot.agent.exception.ToolExecutionException(
+                    "Tool produced more than " + MAX_STDOUT_CHARS + " characters of output",
+                    "OUTPUT_LIMIT_EXCEEDED");
+        }
+        return line;
+    }
+
+    private void drainStderr() {
+        try {
+            String line;
+            while ((line = stderr.readLine()) != null) {
+                if (stderrBuffer.length() < MAX_STDERR_CHARS) {
+                    stderrBuffer.append(line).append('\n');
+                }
+                log.debug("[executionId={}] [PYTHON-STDERR] {}", context.getExecutionId(), line);
+            }
+        } catch (IOException e) {
+            // Expected when the process is killed by the watchdog.
+            log.trace("[executionId={}] stderr stream closed", context.getExecutionId());
+        }
     }
 
     /**
@@ -79,7 +139,7 @@ public class PythonProtocolHandler {
             while (true) {
                 checkTimeout();
 
-                String line = stdout.readLine();
+                String line = readStdoutLine();
                 if (line == null) {
                     // EOF from Python
                     String error = readStderr();
@@ -126,13 +186,7 @@ public class PythonProtocolHandler {
                     context.getCallChainList()
             );
         } finally {
-            readerThread.shutdown();
-            try {
-                readerThread.awaitTermination(1, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                readerThread.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
+            stderrDrainer.shutdownNow();
             log.debug("[executionId={}] Protocol handler completed", context.getExecutionId());
         }
     }
@@ -198,8 +252,8 @@ public class PythonProtocolHandler {
      * Read and parse TOOL_CALL section (###EZTOOL_REQUEST###)
      */
     private ProtocolMessage readToolCall() throws Exception {
-        String jsonLine = stdout.readLine();
-        String endMarker = stdout.readLine();
+        String jsonLine = readStdoutLine();
+        String endMarker = readStdoutLine();
 
         if (jsonLine == null) throw new ProtocolException("Missing TOOL_CALL JSON");
         if (endMarker == null || !endMarker.equals(config.getPython().getProtocol().getRequestEndMarker())) {
@@ -223,7 +277,7 @@ public class PythonProtocolHandler {
      * Read and parse RESULT section (###RESULT###)
      */
     private ProtocolMessage readResult() throws Exception {
-        String jsonLine = stdout.readLine();
+        String jsonLine = readStdoutLine();
         if (jsonLine == null) throw new ProtocolException("Missing RESULT JSON");
 
         Map<String, Object> json = jsonMapper.readValue(jsonLine, Map.class);
@@ -289,19 +343,16 @@ public class PythonProtocolHandler {
     }
 
     /**
-     * Drain stderr stream if process exits
+     * Snapshot of stderr collected so far by the background drainer.
      */
     private String readStderr() {
+        // Brief grace period so the drainer can flush the tail after the process exits.
         try {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while (stderr.ready() && (line = stderr.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            return sb.toString();
-        } catch (IOException e) {
-            return null;
+            stderrDrainer.awaitTermination(200, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
+        return stderrBuffer.toString();
     }
 
     enum MessageType { TOOL_CALL, RESULT, ERROR }

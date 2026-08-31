@@ -13,7 +13,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import com.chatbot.agent.security.InvocationPrincipal;
 import lombok.Data;
 
 import java.util.List;
@@ -45,9 +47,11 @@ public class ChatbotController {
     public ResponseEntity<String> chat(
             @PathVariable Long chatbotId,
             @RequestBody String message,
-            @AuthenticationPrincipal UserDetails userDetails) {
+            @AuthenticationPrincipal UserDetails userDetails,
+            Authentication authentication) {
 
-        String userId = getUserId(userDetails);
+        InvocationPrincipal principal = InvocationPrincipal.from(authentication);
+        String userId = principal.getName();
         String requestId = UUID.randomUUID().toString();
 
         // Set request ID in MDC (inherited by all threads in this request)
@@ -60,7 +64,7 @@ public class ChatbotController {
                     chatbotId, userId, message.length());
 
             // Process chat message (your existing logic)
-            String response = chatbotService.handleChat(chatbotId, message);
+            String response = chatbotService.handleChat(chatbotId, message, principal);
 
             log.info("Chat request completed successfully");
 
@@ -91,9 +95,11 @@ public class ChatbotController {
     public ResponseEntity<ToolExecutionResult> executeTool(
             @PathVariable Long chatbotId,
             @RequestBody ToolModel.ToolExecutionRequest request,
-            @AuthenticationPrincipal UserDetails userDetails) {
+            @AuthenticationPrincipal UserDetails userDetails,
+            Authentication authentication) {
 
-        String userId = getUserId(userDetails);
+        InvocationPrincipal principal = InvocationPrincipal.from(authentication);
+        String userId = principal.getName();
         String requestId = UUID.randomUUID().toString();
 
         MDC.put("requestId", requestId);
@@ -105,7 +111,7 @@ public class ChatbotController {
                     chatbotId, userId, request.getFuncNameKey());
 
             // Execute tool with context management
-            ToolExecutionResult result = toolExecutionService.executeTool(chatbotId, userId, request);
+            ToolExecutionResult result = toolExecutionService.executeTool(chatbotId, principal, request);
 
             if (result.isSuccess()) {
                 log.info("Tool execution completed successfully: tool={}, executionTime={}ms",

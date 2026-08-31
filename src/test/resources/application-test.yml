@@ -1,0 +1,55 @@
+# Test profile.
+#
+# Deliberately avoids external dependencies: no database is reachable in CI, so the tool registry
+# must not preload and metric collection stays off. Nothing here weakens a security control - the
+# sandbox default, the authority gate and the SSRF guard are all exercised as shipped.
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+
+azure:
+  openai:
+    base-url: https://example.openai.azure.com
+    api-key: test-only-not-a-secret
+    deployment-name: test-deployment
+    api-version: 2024-02-01
+    search-endpoint: https://example.search.windows.net
+    search-key: test-only-not-a-secret
+    search-index: test-index
+
+llama:
+  base-url: http://127.0.0.1:11434
+  embedding-model: test
+  generation-model: test
+  vector-db:
+    url: jdbc:h2:mem:vectordb;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+
+document:
+  upload-dir: ./target/test-uploads
+  chunk-size: 500
+  chunk-overlap: 50
+
+citation:
+  max-excerpt-length: 150
+  similarity-threshold: 0.3
+  max-citations-per-sentence: 2
+
+tool-execution:
+  tool-registry:
+    preload-on-startup: false      # no database in CI
+  python:
+    sandbox: DOCKER                # as shipped; nothing is launched during a context test
+
+metrics-collection:
+  enabled: false
+
+# Development user store passwords. Test-only values; SecurityConfig refuses to start without them.
+AGENT_USER_PASSWORD: test-user-pw
+AGENT_OPERATOR_PASSWORD: test-operator-pw
+AGENT_ADMIN_PASSWORD: test-admin-pw

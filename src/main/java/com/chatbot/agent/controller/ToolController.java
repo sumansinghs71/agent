@@ -6,8 +6,11 @@ import com.chatbot.agent.service.tools.ToolExecutionService;
 import com.chatbot.agent.repository.ToolRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import com.chatbot.agent.security.InvocationPrincipal;
 
 import java.util.List;
 
@@ -89,9 +92,18 @@ public class ToolController {
     @PostMapping("/{chatbotId}/execute")
     public ResponseEntity<ToolExecutionResult> executeTool(
             @PathVariable Long chatbotId,
-            @RequestBody ToolModel.ToolExecutionRequest request) {
-        log.info("Executing tool: {} for chatbotId: {}", request.getFuncNameKey(), chatbotId);
-        ToolExecutionResult result = toolExecutionService.executeTool(chatbotId,"test", request);
-        return ResponseEntity.ok(result);
+            @RequestBody ToolModel.ToolExecutionRequest request,
+            Authentication authentication) {
+
+        // The caller's real authority, not the literal "test" this previously passed. Whether this
+        // particular tool may run is decided by ToolInvocationPolicy, not here.
+        InvocationPrincipal principal = InvocationPrincipal.from(authentication);
+        log.info("Executing tool: {} for chatbotId: {} as {}",
+                request.getFuncNameKey(), chatbotId, principal.getName());
+
+        ToolExecutionResult result = toolExecutionService.executeTool(chatbotId, principal, request);
+        return result.isSuccess()
+                ? ResponseEntity.ok(result)
+                : ResponseEntity.status(HttpStatus.BAD_REQUEST).body(result);
     }
 }

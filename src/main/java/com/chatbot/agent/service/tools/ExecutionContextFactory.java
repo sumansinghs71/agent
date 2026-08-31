@@ -57,6 +57,10 @@ public class ExecutionContextFactory {
      * @return New ExecutionContext
      */
     public ExecutionContext create(Long chatbotId, String userId) {
+        return create(chatbotId, com.chatbot.agent.security.InvocationPrincipal.of(userId));
+    }
+
+    public ExecutionContext create(Long chatbotId, com.chatbot.agent.security.InvocationPrincipal principal) {
         // Capture requestId from MDC when creating context
         String requestId = MDC.get("requestId");
         if (requestId == null) {
@@ -64,7 +68,7 @@ public class ExecutionContextFactory {
             log.debug("No requestId in MDC, generated new one: {}", requestId);
         }
 
-        ExecutionContext context = new ExecutionContext(chatbotId, userId, requestId, config);
+        ExecutionContext context = new ExecutionContext(chatbotId, principal, requestId, config);
 
 
         // Track it

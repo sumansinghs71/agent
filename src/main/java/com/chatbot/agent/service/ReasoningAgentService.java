@@ -5,6 +5,7 @@ import com.chatbot.agent.repository.ChatbotRepository;
 import com.chatbot.agent.service.citation.CitationService;
 import com.chatbot.agent.service.guardrails.*;
 import com.chatbot.agent.service.tools.ToolExecutionService;
+import com.chatbot.agent.security.InvocationPrincipal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,15 +60,29 @@ public class ReasoningAgentService {
     }
 
 
+    /** @deprecated carries no authority; tool actions will be denied. Pass a real principal. */
+    @Deprecated
     public String processQuery(Long chatbotId, String userQuery) {
-        CitationModel.ResponseWithCitations responseWithCitations = processQueryWithCitations(chatbotId, userQuery);
+        return processQuery(chatbotId, userQuery, InvocationPrincipal.system());
+    }
+
+    public String processQuery(Long chatbotId, String userQuery, InvocationPrincipal principal) {
+        CitationModel.ResponseWithCitations responseWithCitations =
+                processQueryWithCitations(chatbotId, userQuery, principal);
         return formatResponseWithCitations(responseWithCitations);
     }
 
     /**
      * Main reasoning entry point with guardrails
      */
+    /** @deprecated carries no authority; tool actions will be denied. Pass a real principal. */
+    @Deprecated
     public CitationModel.ResponseWithCitations processQueryWithCitations(Long chatbotId, String userQuery) {
+        return processQueryWithCitations(chatbotId, userQuery, InvocationPrincipal.system());
+    }
+
+    public CitationModel.ResponseWithCitations processQueryWithCitations(
+            Long chatbotId, String userQuery, InvocationPrincipal principal) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] ReasoningAgent processing query with citations for chatbot: {}",
                 requestId, chatbotId);
@@ -115,7 +130,7 @@ public class ReasoningAgentService {
 
             // STEP 4: Execute based on intent WITH CITATIONS
             CitationModel.ResponseWithCitations responseWithCitations =
-                    executeBasedOnIntentWithCitations(chatbot, sanitizedQuery, intent, availableTools);
+                    executeBasedOnIntentWithCitations(principal, chatbot, sanitizedQuery, intent, availableTools);
 
             // STEP 5: OUTPUT GUARDRAILS
             log.info("[requestId={}] Running OUTPUT guardrails validation", requestId);
@@ -166,6 +181,7 @@ public class ReasoningAgentService {
      * Execute based on intent and return ResponseWithCitations
      */
     private CitationModel.ResponseWithCitations executeBasedOnIntentWithCitations(
+            InvocationPrincipal principal,
             Model.Chatbot chatbot,
             String userQuery,
             QueryIntent intent,
@@ -173,11 +189,11 @@ public class ReasoningAgentService {
 
         switch (intent.getActionType()) {
             case TOOL:
-                return executeToolActionWithCitations(chatbot, userQuery, intent);
+                return executeToolActionWithCitations(principal, chatbot, userQuery, intent);
             case DOCUMENT:
                 return executeDocumentActionWithCitations(chatbot, userQuery);
             case HYBRID:
-                return executeHybridActionWithCitations(chatbot, userQuery, intent);
+                return executeHybridActionWithCitations(principal, chatbot, userQuery, intent);
             case CONVERSATIONAL:
                 return executeConversationalActionWithCitations(chatbot, userQuery);
             default:
@@ -189,6 +205,7 @@ public class ReasoningAgentService {
      * TOOL action with citations
      */
     private CitationModel.ResponseWithCitations executeToolActionWithCitations(
+            InvocationPrincipal principal,
             Model.Chatbot chatbot,
             String userQuery,
             QueryIntent intent) {
@@ -202,7 +219,7 @@ public class ReasoningAgentService {
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolExecutionResult result = toolExecutionService.executeTool(
-                    chatbot.getId(),"system", toolRequest);
+                    chatbot.getId(), principal, toolRequest);
 
             if (!result.isSuccess()) {
                 return createErrorResponse("I tried to fetch the data but encountered an error: " + result.getError());
@@ -305,6 +322,7 @@ public class ReasoningAgentService {
      * HYBRID action with citations
      */
     private CitationModel.ResponseWithCitations executeHybridActionWithCitations(
+            InvocationPrincipal principal,
             Model.Chatbot chatbot,
             String userQuery,
             QueryIntent intent) {
@@ -319,7 +337,7 @@ public class ReasoningAgentService {
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolExecutionResult toolResult = toolExecutionService.executeTool(
-                    chatbot.getId(), "system",toolRequest);
+                    chatbot.getId(), principal, toolRequest);
 
             // Get document chunks
             List<CitationModel.ChunkWithMetadata> chunks;
@@ -627,15 +645,15 @@ public class ReasoningAgentService {
         return intent;
     }
 
-    private String executeBasedOnIntent(Model.Chatbot chatbot, String userQuery,
+    private String executeBasedOnIntent(InvocationPrincipal principal, Model.Chatbot chatbot, String userQuery,
                                         QueryIntent intent, List<ToolModel.Tool> availableTools) {
         switch (intent.getActionType()) {
             case TOOL:
-                return executeToolAction(chatbot, userQuery, intent);
+                return executeToolAction(principal, chatbot, userQuery, intent);
             case DOCUMENT:
                 return executeDocumentAction(chatbot, userQuery);
             case HYBRID:
-                return executeHybridAction(chatbot, userQuery, intent);
+                return executeHybridAction(principal, chatbot, userQuery, intent);
             case CONVERSATIONAL:
                 return executeConversationalAction(chatbot, userQuery);
             default:
@@ -643,7 +661,7 @@ public class ReasoningAgentService {
         }
     }
 
-    private String executeToolAction(Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
+    private String executeToolAction(InvocationPrincipal principal, Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing TOOL action: {}", requestId, intent.getToolName());
 
@@ -653,7 +671,7 @@ public class ReasoningAgentService {
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolExecutionResult result = toolExecutionService.executeTool(
-                    chatbot.getId(), "system",toolRequest);
+                    chatbot.getId(), principal, toolRequest);
 
             if (!result.isSuccess()) {
                 return "I tried to fetch the data but encountered an error: " + result.getError();
@@ -776,7 +794,7 @@ public class ReasoningAgentService {
         return formatted.toString();
     }
 
-    private String executeHybridAction(Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
+    private String executeHybridAction(InvocationPrincipal principal, Model.Chatbot chatbot, String userQuery, QueryIntent intent) {
         String requestId = MDC.get("requestId");
         log.info("[requestId={}] Executing HYBRID action", requestId);
 
@@ -786,7 +804,7 @@ public class ReasoningAgentService {
             toolRequest.setParams(intent.getParameters() != null ? intent.getParameters() : new HashMap<>());
 
             ToolExecutionResult toolResult = toolExecutionService.executeTool(
-                    chatbot.getId(), "system",toolRequest);
+                    chatbot.getId(), principal, toolRequest);
 
             String documentContext = "";
             if (chatbot.getModelType() == Model.ModelType.LLAMA) {

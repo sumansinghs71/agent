@@ -8,6 +8,12 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.BufferingClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.core5.http.io.SocketConfig;
+import org.apache.hc.core5.util.Timeout;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
@@ -78,12 +84,53 @@ public class AppConfig {
         return new JdbcTemplate(pgVectorDataSource());
     }
 
+    /** Time to establish a TCP connection. */
+    private static final int REST_CONNECT_TIMEOUT_MS = 5_000;
+
+    /**
+     * Time to wait for response bytes. Bounded above by the per-tool timeout, which the execution
+     * context clamps again to the chain's remaining aggregate budget.
+     */
+    private static final int REST_READ_TIMEOUT_MS = 20_000;
+
+    /** Time to wait for a connection from the pool - a saturated pool must fail, not queue forever. */
+    private static final int REST_CONNECTION_REQUEST_TIMEOUT_MS = 3_000;
+
     // RestTemplate with proper JSON handling
     @Bean
     public RestTemplate restTemplate() {
-        HttpComponentsClientHttpRequestFactory httpFactory = new HttpComponentsClientHttpRequestFactory();
-        httpFactory.setConnectTimeout(5000);
-      //  httpFactory.setReadTimeout(5000);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(Timeout.ofMilliseconds(REST_CONNECT_TIMEOUT_MS))
+                .setResponseTimeout(Timeout.ofMilliseconds(REST_READ_TIMEOUT_MS))
+                .setConnectionRequestTimeout(Timeout.ofMilliseconds(REST_CONNECTION_REQUEST_TIMEOUT_MS))
+                .build();
+
+        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+        connectionManager.setDefaultSocketConfig(SocketConfig.custom()
+                .setSoTimeout(Timeout.ofMilliseconds(REST_READ_TIMEOUT_MS))
+                .build());
+        connectionManager.setMaxTotal(50);
+        connectionManager.setDefaultMaxPerRoute(10);
+
+        CloseableHttpClient httpClient = HttpClients.custom()
+                .setDefaultRequestConfig(requestConfig)
+                .setConnectionManager(connectionManager)
+                .build();
+
+        HttpComponentsClientHttpRequestFactory httpFactory =
+                new HttpComponentsClientHttpRequestFactory(httpClient);
+
+        // Both timeouts are mandatory. The read timeout was previously commented out, which meant a
+        // downstream that accepted the connection and then never responded held the calling request
+        // thread forever - for REST tools AND for every Azure OpenAI call, since they share this
+        // RestTemplate. A slow dependency could exhaust the servlet thread pool with no error and
+        // no metric.
+        //
+        // Note on the API: Spring Framework 6.1 removed
+        // HttpComponentsClientHttpRequestFactory#setReadTimeout, which is the likely reason the
+        // original line was commented out rather than fixed. With HttpClient 5 the response
+        // timeout belongs on RequestConfig and the socket timeout on the connection manager, so
+        // the client is built explicitly here.
 
         // ✅ Wrap with BufferingClientHttpRequestFactory to read entire stream safely
         RestTemplate restTemplate = new RestTemplate(

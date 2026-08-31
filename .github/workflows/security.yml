@@ -1,0 +1,92 @@
+name: Security
+
+on:
+  push:
+    branches: [ main, DAG, development ]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'      # weekly, so new detections surface without a push
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  secret-scan-tree:
+    name: Secret scan (working tree) — GATE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: gitleaks (tree only)
+        # --no-git scans the checked-out files, including anything untracked. This is the gate: the
+        # tree must be clean on every push and PR. History is scanned separately below, because it
+        # still contains the pre-M0 secrets until the purge in
+        # docs/security/GIT_HISTORY_PURGE_PLAN.md is approved and executed.
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --no-git --source . --config .gitleaks.toml --redact --verbose
+
+  secret-scan-history:
+    name: Secret scan (full history) — INFORMATIONAL
+    runs-on: ubuntu-latest
+    continue-on-error: true      # expected to fail until the history purge is executed
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (history)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --source . --config .gitleaks.toml --redact --verbose
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          queries: security-extended
+      - run: ./mvnw -B -ntp compile -DskipTests
+      - uses: github/codeql-action/analyze@v3
+
+  sandbox-adversarial:
+    name: Sandbox adversarial suite
+    runs-on: ubuntu-latest      # Docker daemon is present on this runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Pull sandbox image
+        run: docker pull python:3.11-slim
+
+      - name: Confirm the daemon is reachable
+        # The adversarial tests are @EnabledIf(dockerAvailable) and would otherwise SKIP silently.
+        # A skipped security test that reports green is worse than no test.
+        run: docker info > /dev/null
+
+      - name: Security test suites
+        run: >
+          ./mvnw -B -ntp test
+          -Dtest='DockerSandboxAdversarialTest,DockerSandboxCommandTest,SsrfGuardTest,ToolInvocationPolicyTest,ApiSecurityTest'
+          -DfailIfNoTests=true
+
+      - name: Fail if the adversarial suite did not actually run
+        run: |
+          REPORT=target/surefire-reports/com.chatbot.agent.service.tools.sandbox.DockerSandboxAdversarialTest.txt
+          test -f "$REPORT" || { echo "Adversarial suite did not run"; exit 1; }
+          grep -q "Tests run: 1[0-9]" "$REPORT" || { echo "Unexpectedly few adversarial tests"; cat "$REPORT"; exit 1; }
+          cat "$REPORT"

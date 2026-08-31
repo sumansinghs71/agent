@@ -36,6 +36,19 @@ public class ToolModel {
         private String jsCode;
         private String jsEngine; // "nashorn" or "graalvm"
 
+        // Governance fields
+        /**
+         * Disabled tools are refused by {@code ToolInvocationPolicy} before any dispatch.
+         * Null is treated as enabled so that rows written before this column existed keep working.
+         */
+        private Boolean enabled;
+
+        /**
+         * Declared side-effect class. When null the runtime DERIVES a conservative value
+         * (see {@code ToolInvocationPolicy#classify}) rather than assuming the tool is safe.
+         */
+        private SideEffect sideEffect;
+
         // Common fields
         private Long timeout;
         private LocalDateTime createdAt;
@@ -50,6 +63,28 @@ public class ToolModel {
         private boolean required;
         private Object defaultValue;
         private String validation; // regex or validation rules
+    }
+
+    /**
+     * How much damage an invocation of this tool can do.
+     *
+     * <p>This is the axis authorization is decided on. Function type says how a tool is implemented;
+     * side effect says what it is permitted to do. They are deliberately separate: a SQL tool running
+     * a SELECT and a SQL tool running a stored procedure are the same function type and very different
+     * risks.
+     *
+     * <p>Ordering is significant - {@code ordinal()} is used as a severity rank, so entries must stay
+     * ordered least- to most-dangerous.
+     */
+    public enum SideEffect {
+        /** Observes state, changes nothing. */
+        READ_ONLY,
+        /** Mutates state in a way that can be undone. */
+        REVERSIBLE_WRITE,
+        /** Mutates state in a way that cannot be undone. Requires explicit approval. */
+        IRREVERSIBLE_WRITE,
+        /** Executes code, or can invoke other tools, so its blast radius is not statically bounded. */
+        PRIVILEGED
     }
 
     /**

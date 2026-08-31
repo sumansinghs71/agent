@@ -10,6 +10,8 @@ import org.springframework.core.io.Resource;
 import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.sql.Connection;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,17 +26,8 @@ public class DynamicDataSourceConfig {
     private Properties datasourceProperties;
 
     @Bean
-    public DynamicDataSourceManager dynamicDataSourceManager() {
-        try {
-            loadDatasourceProperties();
-        } catch (IOException e) {
-            // Fail fast with an unchecked exception that gives a clear startup error
-            throw new IllegalStateException(
-                    "Failed to load datasource properties from classpath:static/datasource.properties. " +
-                            "Please ensure the file exists and is readable.",
-                    e
-            );
-        }
+    public DynamicDataSourceManager dynamicDataSourceManager() throws IOException {
+        loadDatasourceProperties();
         return new DynamicDataSourceManager(datasourceProperties, dataSourceCache);
     }
 
@@ -42,6 +35,45 @@ public class DynamicDataSourceConfig {
         datasourceProperties = new Properties();
         try (InputStream input = datasourcesResource.getInputStream()) {
             datasourceProperties.load(input);
+        }
+        resolvePlaceholders(datasourceProperties);
+    }
+
+    /**
+     * Expand {@code ${VAR}} / {@code ${VAR:default}} placeholders from the environment.
+     *
+     * <p>This file is read as a raw {@link Properties} resource, not through Spring's
+     * {@code Environment}, so Spring's own placeholder resolution never runs on it. Without this
+     * step a {@code ${...}} value would be handed to Hikari verbatim. Credentials therefore have
+     * to be committed as literals - which is exactly how the datasource password ended up in this
+     * repository's history.
+     *
+     * <p>An unset variable with no default resolves to empty, which the required-property checks
+     * in {@code createDataSource} turn into an explicit startup failure. Failing loudly is the
+     * point: connecting with blank credentials would be worse.
+     */
+    static void resolvePlaceholders(Properties properties) {
+        Pattern placeholder = Pattern.compile("\\$\\{([A-Za-z0-9_]+)(?::([^}]*))?}");
+
+        for (String key : properties.stringPropertyNames()) {
+            String raw = properties.getProperty(key);
+            if (raw == null || !raw.contains("${")) {
+                continue;
+            }
+
+            Matcher m = placeholder.matcher(raw);
+            StringBuilder out = new StringBuilder();
+            while (m.find()) {
+                String var = m.group(1);
+                String fallback = m.group(2) != null ? m.group(2) : "";
+                String value = System.getenv(var);
+                if (value == null || value.isEmpty()) {
+                    value = System.getProperty(var, fallback);
+                }
+                m.appendReplacement(out, Matcher.quoteReplacement(value));
+            }
+            m.appendTail(out);
+            properties.setProperty(key, out.toString());
         }
     }
 

@@ -4,6 +4,8 @@ import com.chatbot.agent.model.GuardrailModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import com.chatbot.agent.config.ToolExecutionProperties;
+import com.chatbot.agent.service.policy.SsrfGuard;
 
 import java.net.URI;
 import java.util.Arrays;
@@ -13,6 +15,14 @@ import java.util.List;
 public class RuntimeGuardrailsService {
 
     private static final Logger log = LoggerFactory.getLogger(RuntimeGuardrailsService.class);
+
+    private final SsrfGuard ssrfGuard;
+
+    public RuntimeGuardrailsService(ToolExecutionProperties config) {
+        this.ssrfGuard = new SsrfGuard(
+                config.getSecurity().isEnforceOutboundAllowlist(),
+                config.getSecurity().getAllowedOutboundHosts());
+    }
 
     private static final List<String> FORBIDDEN_SQL_KEYWORDS = Arrays.asList(
             "DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE", "GRANT", "REVOKE",
@@ -94,82 +104,25 @@ public class RuntimeGuardrailsService {
         return result;
     }
 
+    /**
+     * Delegates to {@link SsrfGuard}, which parses the URL and inspects every resolved address.
+     * The previous implementation compared host strings, missed the cloud metadata endpoint
+     * entirely, and computed an allowlist it then ignored.
+     */
     public GuardrailModel.GuardrailResult validateApiUrl(String url) {
-        log.debug("Validating API URL: {}", url);
-
         GuardrailModel.GuardrailResult result = new GuardrailModel.GuardrailResult();
-        result.setAllowed(true);
+        SsrfGuard.Verdict verdict = ssrfGuard.check(url);
 
-        try {
-            URI uri = new URI(url);
-            String host = uri.getHost();
-            String scheme = uri.getScheme();
-
-            // Check protocol
-            if (!"https".equals(scheme) && !"http".equals(scheme)) {
-                result.setAllowed(false);
-                result.setViolation(createViolation(
-                        GuardrailModel.ViolationType.UNAUTHORIZED_API_ACCESS,
-                        "Invalid URL scheme: " + scheme,
-                        GuardrailModel.SeverityLevel.HIGH
-                ));
-                return result;
-            }
-
-            // Check for internal network (SSRF prevention)
-            if (isInternalNetwork(host)) {
-                result.setAllowed(false);
-                result.setViolation(createViolation(
-                        GuardrailModel.ViolationType.SSRF_ATTEMPT,
-                        "Cannot access internal network",
-                        GuardrailModel.SeverityLevel.CRITICAL
-                ));
-                return result;
-            }
-
-            // Optional: Check whitelist
-            boolean domainAllowed = ALLOWED_DOMAINS.stream()
-                    .anyMatch(allowed -> host.endsWith(allowed));
-
-            if (!domainAllowed) {
-                log.warn("Domain not in whitelist: {}", host);
-                // You can choose to block or just warn
-                // For now, we'll allow but log
-            }
-
-        } catch (Exception e) {
-            result.setAllowed(false);
-            result.setViolation(createViolation(
-                    GuardrailModel.ViolationType.UNAUTHORIZED_API_ACCESS,
-                    "Invalid URL format",
-                    GuardrailModel.SeverityLevel.HIGH
-            ));
+        result.setAllowed(verdict.allowed());
+        if (!verdict.allowed()) {
+            GuardrailModel.ViolationType type = switch (verdict.reason()) {
+                case "PRIVATE_ADDRESS", "METADATA_ENDPOINT" -> GuardrailModel.ViolationType.SSRF_ATTEMPT;
+                default -> GuardrailModel.ViolationType.UNAUTHORIZED_API_ACCESS;
+            };
+            result.setViolation(createViolation(type, verdict.detail(),
+                    GuardrailModel.SeverityLevel.CRITICAL));
         }
-
         return result;
-    }
-
-    private boolean isInternalNetwork(String host) {
-        return host.equals("localhost")
-                || host.equals("127.0.0.1")
-                || host.startsWith("192.168.")
-                || host.startsWith("10.")
-                || host.startsWith("172.16.")
-                || host.startsWith("172.17.")
-                || host.startsWith("172.18.")
-                || host.startsWith("172.19.")
-                || host.startsWith("172.20.")
-                || host.startsWith("172.21.")
-                || host.startsWith("172.22.")
-                || host.startsWith("172.23.")
-                || host.startsWith("172.24.")
-                || host.startsWith("172.25.")
-                || host.startsWith("172.26.")
-                || host.startsWith("172.27.")
-                || host.startsWith("172.28.")
-                || host.startsWith("172.29.")
-                || host.startsWith("172.30.")
-                || host.startsWith("172.31.");
     }
 
     private GuardrailModel.GuardrailViolation createViolation(

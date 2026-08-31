@@ -35,9 +35,12 @@ public class OllamaService {
     private static final Logger log = LoggerFactory.getLogger(OllamaService.class);
 
     private final RestTemplate restTemplate;
+    private final com.chatbot.agent.metrics.AgentMetrics metrics;
 
-    public OllamaService(@Qualifier("restTemplate") RestTemplate restTemplate) {
+    public OllamaService(@Qualifier("restTemplate") RestTemplate restTemplate,
+                         com.chatbot.agent.metrics.AgentMetrics metrics) {
         this.restTemplate = restTemplate;
+        this.metrics = metrics;
     }
 
     @Data
@@ -87,10 +90,11 @@ public class OllamaService {
         request.setModel(embeddingModel);
         request.setPrompt(text);
 
-        log.info("[requestId={}] OllamaService.generateEmbedding request: url={}, body={}", requestId, url, request);
+        log.debug("[requestId={}] OllamaService.generateEmbedding request: url={}", requestId, url);
         try {
-            EmbeddingResponse response = restTemplate.postForObject(url, request, EmbeddingResponse.class);
-            log.info("[requestId={}] OllamaService.generateEmbedding response: {}", requestId, response);
+            EmbeddingResponse response = metrics.timeLlm("ollama", embeddingModel, "embedding",
+                    () -> restTemplate.postForObject(url, request, EmbeddingResponse.class));
+            log.debug("[requestId={}] OllamaService.generateEmbedding response received", requestId);
             if (response != null && response.getEmbedding() != null) {
                 float[] embedding = new float[response.getEmbedding().size()];
                 for (int i = 0; i < response.getEmbedding().size(); i++) {
@@ -135,15 +139,18 @@ public class OllamaService {
 
             // 5. Send request
             String url = baseUrl + "/api/generate";
-            log.info("[requestId={}] OllamaService.generateResponse request: url={}, body={}", requestId, url, request);
-            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    entity,
-                    new ParameterizedTypeReference<Map<String, Object>>() {},
-                    Timeout.of(Duration.ofSeconds(30))
-            );
-            log.info("[requestId={}] OllamaService.generateResponse response: {}", requestId, response.getBody());
+            log.debug("[requestId={}] OllamaService.generateResponse request: url={}", requestId, url);
+            // NOTE: the previous trailing Timeout.of(...) argument was silently consumed as a URI
+            // variable and never applied a timeout. Real timeouts belong on the RestTemplate's
+            // request factory - see AppConfig, where the read timeout is still commented out.
+            ResponseEntity<Map<String, Object>> response = metrics.timeLlm("ollama", generationModel, "generate",
+                    () -> restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
+                            entity,
+                            new ParameterizedTypeReference<Map<String, Object>>() {}
+                    ));
+            log.debug("[requestId={}] OllamaService.generateResponse response received", requestId);
 
             // 6. Process response
             if (response.getStatusCode().is2xxSuccessful()) {

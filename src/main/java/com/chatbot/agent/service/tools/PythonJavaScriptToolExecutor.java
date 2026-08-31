@@ -2,9 +2,13 @@ package com.chatbot.agent.service.tools;
 
 import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.exception.CodeValidationException;
+import com.chatbot.agent.exception.ToolExecutionTimeoutException;
 import com.chatbot.agent.model.CodeValidationResult;
 import com.chatbot.agent.model.ToolModel;
+import com.chatbot.agent.service.tools.sandbox.PythonSandbox;
+import com.chatbot.agent.service.tools.sandbox.SandboxHandle;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,8 +22,11 @@ import java.io.FileWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -37,14 +44,26 @@ public class PythonJavaScriptToolExecutor {
     private static final Logger log = LoggerFactory.getLogger(PythonJavaScriptToolExecutor.class);
 
     private final ExecutorService executorService;
+    private final ScheduledExecutorService watchdogScheduler;
     private final ScriptEngineManager scriptEngineManager;
     private final PythonScriptBuilder pythonScriptBuilder;
     private final JavaScriptCodeWrapper javascriptCodeWrapper;
     private final ToolExecutionProperties config;
+    private final PythonSandbox sandbox;
+    private final Path scriptDir;
+    private final com.chatbot.agent.metrics.AgentMetrics metrics;
     private ToolExecutionService toolExecutionService; // circular dependency setter
 
     private static final long DEFAULT_TIMEOUT_MS = 30000;
-    private static final String TEMP_DIR = System.getProperty("java.io.tmpdir") + "chatbot-scripts/";
+
+    /**
+     * Staged scripts are readable by the sandbox uid (Docker runs as nobody) but the containing
+     * directory is owner-only, so scripts are not world-listable on the host.
+     */
+    private static final Set<PosixFilePermission> SCRIPT_PERMS =
+            PosixFilePermissions.fromString("rw-r--r--");
+    private static final Set<PosixFilePermission> SCRIPT_DIR_PERMS =
+            PosixFilePermissions.fromString("rwx------");
 
     private static final List<String> DANGEROUS_PYTHON_PATTERNS = Arrays.asList(
             "import os", "import subprocess", "import sys",
@@ -63,21 +82,97 @@ public class PythonJavaScriptToolExecutor {
     public PythonJavaScriptToolExecutor(
             PythonScriptBuilder pythonScriptBuilder,
             JavaScriptCodeWrapper javascriptCodeWrapper,
-            ToolExecutionProperties config) {
+            ToolExecutionProperties config,
+            List<PythonSandbox> availableSandboxes,
+            com.chatbot.agent.metrics.AgentMetrics metrics) {
 
-        this.executorService = Executors.newFixedThreadPool(5);
+        this.metrics = metrics;
+        this.executorService = Executors.newFixedThreadPool(
+                config.getPerformance().getThreadPoolSize(),
+                namedDaemonFactory("eztool-js-"));
+        this.watchdogScheduler = Executors.newScheduledThreadPool(2, namedDaemonFactory("eztool-watchdog-"));
         this.scriptEngineManager = new ScriptEngineManager();
         this.pythonScriptBuilder = pythonScriptBuilder;
         this.javascriptCodeWrapper = javascriptCodeWrapper;
         this.config = config;
 
+        String requested = config.getPython().getSandbox();
+        this.sandbox = availableSandboxes.stream()
+                .filter(s -> s.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Unknown tool-execution.python.sandbox='" + requested + "'. Available: "
+                                + availableSandboxes.stream().map(PythonSandbox::id).toList()));
+
+        String configuredDir = config.getPython().getScriptDir();
+        this.scriptDir = (configuredDir != null && !configuredDir.isBlank())
+                ? Paths.get(configuredDir)
+                : Paths.get(System.getProperty("java.io.tmpdir"), "eztool-scripts");
+
         try {
-            Files.createDirectories(Paths.get(TEMP_DIR));
+            Files.createDirectories(scriptDir);
+            trySetPermissions(scriptDir, SCRIPT_DIR_PERMS);
         } catch (Exception e) {
-            log.error("Failed to create temp directory for scripts", e);
+            throw new IllegalStateException("Failed to create script staging directory: " + scriptDir, e);
         }
 
-        log.info("PythonJavaScriptToolExecutor initialized with full inter-tool and logging support");
+        log.info("PythonJavaScriptToolExecutor initialized. sandbox={}, scriptDir={}",
+                sandbox.id(), scriptDir);
+
+        if (LOCAL_SANDBOX_ID.equalsIgnoreCase(sandbox.id())) {
+            requireExplicitUnsafeOptIn();
+        }
+    }
+
+    /** Name of the opt-in flag. Deliberately long and alarming. */
+    static final String UNSAFE_LOCAL_FLAG = "AGENT_ALLOW_UNSAFE_LOCAL_EXECUTION";
+
+    /**
+     * LOCAL is not a sandbox. It runs generated tool code on the host, in-process-adjacent, as the
+     * JVM user, with the JVM user's filesystem, network and credentials.
+     *
+     * <p>Shipping it as the default is how this repository ended up one unauthenticated HTTP request
+     * away from host code execution. The default is now DOCKER, and selecting LOCAL requires an
+     * explicit, awkward, unmistakable opt-in. Absent that, startup fails: a refused boot is a far
+     * better outcome than a running process that silently has no isolation.
+     */
+    private static void requireExplicitUnsafeOptIn() {
+        String flag = System.getenv(UNSAFE_LOCAL_FLAG);
+        if (flag == null || flag.isBlank()) {
+            flag = System.getProperty(UNSAFE_LOCAL_FLAG, "");
+        }
+
+        if (!"true".equalsIgnoreCase(flag.trim())) {
+            throw new IllegalStateException(
+                    "LOCAL code execution provides no isolation and is disabled by default. "
+                    + "tool-execution.python.sandbox=LOCAL runs tool code on this host as the JVM "
+                    + "user, with its filesystem, network and credentials. Use sandbox=DOCKER. "
+                    + "To override for local development only, set " + UNSAFE_LOCAL_FLAG + "=true.");
+        }
+
+        log.error("!!! {}=true: Python tool code will run on this host with NO ISOLATION. "
+                + "This is a development-only mode and must never be used on a shared or "
+                + "internet-reachable machine. !!!", UNSAFE_LOCAL_FLAG);
+    }
+
+    private static final String LOCAL_SANDBOX_ID = "LOCAL";
+
+    private static ThreadFactory namedDaemonFactory(String prefix) {
+        AtomicInteger counter = new AtomicInteger();
+        return r -> {
+            Thread t = new Thread(r, prefix + counter.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        };
+    }
+
+    private static void trySetPermissions(Path path, Set<PosixFilePermission> perms) {
+        try {
+            Files.setPosixFilePermissions(path, perms);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // Non-POSIX filesystem (Windows). Not fatal.
+            log.debug("Could not set POSIX permissions on {}", path);
+        }
     }
 
     public void setToolExecutionService(ToolExecutionService service) {
@@ -102,7 +197,7 @@ public class PythonJavaScriptToolExecutor {
                 requestId, context.getExecutionId(), tool.getFuncNameKey());
 
         try {
-            validatePythonCode(tool.getPythonCode());
+            lintPythonCodeBestEffort(tool.getPythonCode());
             String scriptContent = pythonScriptBuilder.buildScript(context, tool, params);
 
             log.debug("[executionId={}] Generated Python script ({} bytes)",
@@ -111,7 +206,7 @@ public class PythonJavaScriptToolExecutor {
             Object result = executePythonWithProtocol(
                     scriptContent,
                     context,
-                    tool.getTimeout() != null ? tool.getTimeout() : DEFAULT_TIMEOUT_MS
+                    effectiveTimeoutMs(context, tool)
             );
 
             log.info("[requestId={}] [executionId={}] [tool={}] Python tool executed successfully",
@@ -122,45 +217,103 @@ public class PythonJavaScriptToolExecutor {
         } catch (SecurityException e) {
             log.error("[requestId={}] Security violation in Python code", requestId, e);
             throw new RuntimeException("Python code contains unsafe operations: " + e.getMessage());
+        } catch (ToolExecutionTimeoutException e) {
+            // Preserve the type so ToolExecutionService maps it to a TIMEOUT result, not INTERNAL_ERROR.
+            throw e;
         } catch (Exception e) {
             log.error("[requestId={}] Python execution failed", requestId, e);
             throw new RuntimeException("Python execution error: " + e.getMessage());
         }
     }
 
-    private Object executePythonWithProtocol(String script, ExecutionContext context, long timeoutMs) throws Exception {
-        String scriptId = UUID.randomUUID().toString();
-        Path scriptPath = Paths.get(TEMP_DIR, scriptId + ".py");
+    /**
+     * A tool may never run past the chain's remaining aggregate budget. Previously the per-tool
+     * timeout was used alone, so a chain could overshoot its aggregate timeout by a full tool
+     * timeout on every hop.
+     */
+    private long effectiveTimeoutMs(ExecutionContext context, ToolModel.Tool tool) {
+        long toolTimeout = tool.getTimeout() != null ? tool.getTimeout() : DEFAULT_TIMEOUT_MS;
+        long remaining = context.getRemainingTimeMs();
 
-        try (FileWriter writer = new FileWriter(scriptPath.toFile())) {
-            writer.write(script);
+        if (remaining <= 0) {
+            throw new ToolExecutionTimeoutException(
+                    "Aggregate timeout exhausted before starting tool '" + tool.getFuncNameKey() + "'",
+                    context.getConfig().getTimeout().getAggregateTimeoutMs(),
+                    context.getElapsedTimeMs(),
+                    tool.getFuncNameKey(),
+                    context.getCallChainList());
         }
 
-        log.debug("[executionId={}] Python script saved at {}", context.getExecutionId(), scriptPath);
+        long effective = Math.min(toolTimeout, remaining);
+        if (effective < toolTimeout) {
+            log.debug("[executionId={}] Tool '{}' timeout clamped {}ms -> {}ms by remaining chain budget",
+                    context.getExecutionId(), tool.getFuncNameKey(), toolTimeout, effective);
+        }
+        return effective;
+    }
 
-        ProcessBuilder pb = new ProcessBuilder(
-                config.getPython().getInterpreterPath(),
-                scriptPath.toString()
-        );
-        pb.redirectErrorStream(false);
-        Process process = pb.start();
+    private Object executePythonWithProtocol(String script, ExecutionContext context, long timeoutMs) throws Exception {
+        Path scriptPath = stageScript(script, context);
 
+        SandboxHandle handle = sandbox.launch(scriptPath, context.getExecutionId(), timeoutMs);
+        Process process = handle.process();
         context.registerProcess(process);
+
+        // THE HANG FIX.
+        // The protocol loop blocks in stdout.readLine(), so its own checkTimeout() can only fire
+        // between output lines - a Python tool that loops without printing was previously
+        // unkillable and hung the request thread forever. This watchdog runs on a separate thread
+        // and kills the sandbox unconditionally; the kill closes the pipe, readLine() returns null,
+        // and the blocked loop unwinds.
+        ScheduledFuture<?> watchdog = watchdogScheduler.schedule(() -> {
+            log.error("[executionId={}] Watchdog: Python sandbox [{}] exceeded {}ms, killing",
+                    context.getExecutionId(), handle.descriptor(), timeoutMs);
+            metrics.recordSandboxKill(context.getCurrentToolId(), sandbox.id());
+            handle.forceKill();
+        }, timeoutMs, TimeUnit.MILLISECONDS);
 
         try {
             PythonProtocolHandler handler = new PythonProtocolHandler(process, context, this, timeoutMs, config);
             Object result = handler.executeWithProtocol();
             process.waitFor(1, TimeUnit.SECONDS);
             return result;
+
+        } catch (Exception e) {
+            if (handle.wasKilled()) {
+                throw new ToolExecutionTimeoutException(
+                        String.format("Python tool exceeded its %dms budget and was terminated", timeoutMs),
+                        timeoutMs,
+                        context.getElapsedTimeMs(),
+                        context.getCurrentToolId(),
+                        context.getCallChainList());
+            }
+            throw e;
+
         } finally {
+            watchdog.cancel(false);
+            handle.close();
             context.unregisterProcess(process);
             try {
                 Files.deleteIfExists(scriptPath);
-                log.debug("[executionId={}] Temp Python script deleted", context.getExecutionId());
             } catch (Exception e) {
-                log.warn("[executionId={}] Failed to delete temp script {}", context.getExecutionId(), scriptPath, e);
+                log.warn("[executionId={}] Failed to delete staged script {}",
+                        context.getExecutionId(), scriptPath, e);
             }
         }
+    }
+
+    /**
+     * Write the generated script where the sandbox can read it. Never piped via stdin - stdin
+     * belongs to the eztool() protocol.
+     */
+    private Path stageScript(String script, ExecutionContext context) throws java.io.IOException {
+        Path scriptPath = scriptDir.resolve(UUID.randomUUID() + ".py");
+        try (FileWriter writer = new FileWriter(scriptPath.toFile())) {
+            writer.write(script);
+        }
+        trySetPermissions(scriptPath, SCRIPT_PERMS);
+        log.debug("[executionId={}] Python script staged at {}", context.getExecutionId(), scriptPath);
+        return scriptPath;
     }
 
     // ---------------------------------------------------------------------------
@@ -176,7 +329,7 @@ public class PythonJavaScriptToolExecutor {
                 requestId, context.getExecutionId(), tool.getFuncNameKey());
 
         try {
-            validateJavaScriptCode(tool.getJsCode());
+            lintJavaScriptCodeBestEffort(tool.getJsCode());
 
             CodeValidationResult validation = javascriptCodeWrapper.validateAndWrap(tool);
             if (!validation.isValid()) {
@@ -246,17 +399,35 @@ public class PythonJavaScriptToolExecutor {
                 }
             });
 
-            long timeout = (tool.getTimeout() != null) ? tool.getTimeout() : DEFAULT_TIMEOUT_MS;
-            Object result = future.get(timeout, TimeUnit.MILLISECONDS);
+            long timeout = effectiveTimeoutMs(context, tool);
+            Object result;
+            try {
+                result = future.get(timeout, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                // Best-effort only. A tight JS loop ignores interruption, so the worker thread stays
+                // burning a pool slot until the JVM restarts. Bounding that properly requires
+                // replacing ScriptEngineManager with a raw GraalJS Context carrying a statement
+                // limit, which can then be closed from this thread. Tracked as follow-up.
+                future.cancel(true);
+                log.error("[executionId={}] JavaScript tool '{}' exceeded {}ms. Worker thread may " +
+                                "remain blocked; {} of {} JS pool threads at risk.",
+                        context.getExecutionId(), tool.getFuncNameKey(), timeout,
+                        1, config.getPerformance().getThreadPoolSize());
+                throw new ToolExecutionTimeoutException(
+                        String.format("JavaScript tool exceeded its %dms budget", timeout),
+                        timeout,
+                        context.getElapsedTimeMs(),
+                        tool.getFuncNameKey(),
+                        context.getCallChainList());
+            }
 
             log.info("[requestId={}] [executionId={}] JS tool executed successfully",
                     requestId, context.getExecutionId());
 
             return result;
 
-        } catch (TimeoutException e) {
-            log.error("[executionId={}] JavaScript tool timed out", context.getExecutionId());
-            throw new RuntimeException("JS execution timeout: " + e.getMessage());
+        } catch (ToolExecutionTimeoutException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[executionId={}] JS tool failed", context.getExecutionId(), e);
             throw new RuntimeException("JS execution failed: " + e.getMessage());
@@ -266,7 +437,15 @@ public class PythonJavaScriptToolExecutor {
     // ---------------------------------------------------------------------------
     // VALIDATIONS & CLEANUP
     // ---------------------------------------------------------------------------
-    private void validatePythonCode(String code) throws SecurityException {
+    /**
+     * Pre-execution lint. NOT a security boundary.
+     *
+     * <p>This denylist blocks a handful of literal spellings and is trivially bypassed - see
+     * docs/00_CURRENT_STATE_AUDIT.md F-2, where 9 of 10 tested payloads passed it. It is retained
+     * only as defence-in-depth: it raises the cost of a careless mistake, and it must never be the
+     * reason anything is considered safe. Containment is the sandbox's job.
+     */
+    private void lintPythonCodeBestEffort(String code) throws SecurityException {
         if (code == null || code.trim().isEmpty())
             throw new SecurityException("Python code empty");
         for (String pattern : DANGEROUS_PYTHON_PATTERNS)
@@ -278,7 +457,8 @@ public class PythonJavaScriptToolExecutor {
             throw new SecurityException("Python code too large");
     }
 
-    private void validateJavaScriptCode(String code) throws SecurityException {
+    /** Pre-execution lint. NOT a security boundary. See {@link #lintPythonCodeBestEffort}. */
+    private void lintJavaScriptCodeBestEffort(String code) throws SecurityException {
         if (code == null || code.trim().isEmpty())
             throw new SecurityException("JS code empty");
         for (String pattern : DANGEROUS_JS_PATTERNS)
@@ -288,7 +468,13 @@ public class PythonJavaScriptToolExecutor {
             throw new SecurityException("JS code too large");
     }
 
+    /**
+     * Previously public but never called, so both pools leaked on context close.
+     */
+    @PreDestroy
     public void shutdown() {
+        log.info("Shutting down tool executor pools");
+        watchdogScheduler.shutdownNow();
         executorService.shutdown();
         try {
             if (!executorService.awaitTermination(5, TimeUnit.SECONDS))

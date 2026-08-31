@@ -1,0 +1,31 @@
+# gitleaks configuration.
+#
+# Extends the default rule set. The custom rule exists because gitleaks' defaults detected the
+# committed Azure key but NOT the committed database password - short, low-entropy, human-chosen
+# credentials in .properties files do not trip entropy-based rules. See
+# docs/security/SECRET_SCAN_REPORT.md §5.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "properties-credential"
+description = "Credential assigned a literal value in a .properties/.yml file"
+# RE2 (Go) has no lookahead: instead of asserting "not ${...}", require the value's first
+# character to be something other than '$' or '<', which excludes ${ENV} refs and <redacted>.
+regex = '''(?i)^[\w.]*\.?(password|passwd|pwd|secret|api[-_]?key|token)\s*[:=]\s*[^$<\s]\S{5,}'''
+path = '''\.(properties|ya?ml)$'''
+
+  [rules.allowlist]
+  regexTarget = "line"
+  regexes = [
+    '''(?i)(replace-me|changeme|example|placeholder|redacted|your-|dummy|fake)''',
+  ]
+
+[allowlist]
+description = "Files that legitimately contain credential-shaped placeholder text"
+paths = [
+  '''\.env\.example$''',
+  '''^docs/security/''',
+  '''^target/''',
+]

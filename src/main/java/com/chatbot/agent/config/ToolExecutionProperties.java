@@ -57,8 +57,11 @@ public class ToolExecutionProperties {
         @Min(1)
         private int maxChainDepth = 5;
 
-        @Min(1)
-        private long aggregateTimeoutSeconds = 60;
+        // Removed: `aggregateTimeoutSeconds`. It was never read by any code, its name said seconds
+        // while its @Min(1000) constraint implied milliseconds, and its own default of 60 violated
+        // that constraint - so binding failed and the application could not start at all. The
+        // aggregate budget that is genuinely enforced is `timeout.aggregate-timeout-ms`.
+        // Found by the first Spring context test (M0.10).
 
         private boolean circularDependencyCheck = true;
     }
@@ -69,19 +72,39 @@ public class ToolExecutionProperties {
     @Data
     public static class PythonConfig {
         private ExecutorType executorType = ExecutorType.STDIN_STDOUT_PROTOCOL;
-        
+
         @NotNull
         private Protocol protocol = new Protocol();
-        
+
+        /**
+         * Which PythonSandbox implementation to use: LOCAL (dev only, no isolation) or DOCKER.
+         * Must match a PythonSandbox.id().
+         */
+        private String sandbox = "DOCKER";
+
+        /**
+         * Directory where generated scripts are staged before launch. Must be a path the Docker
+         * daemon can bind-mount when sandbox=DOCKER. Defaults to ${java.io.tmpdir}/eztool-scripts.
+         */
+        private String scriptDir;
+
+        @NotNull
+        private DockerConfig docker = new DockerConfig();
+
         private String interpreterPath = "python3";
-        
-        private List<String> interpreterArgs = List.of("--isolated");
-        
+
+        /**
+         * Extra interpreter flags. "-I" is CPython isolated mode: ignores PYTHON* env vars and
+         * omits the script's directory and the user site-packages dir from sys.path.
+         * NOTE: the long form "--isolated" does not exist in CPython.
+         */
+        private List<String> interpreterArgs = List.of("-I");
+
         @Min(1)
         private int maxCodeSizeBytes = 100_000; // 100KB
-        
+
         private List<String> allowedModules = List.of("json", "math", "datetime", "re", "statistics");
-        
+
         @Data
         public static class Protocol {
             private String requestMarker = "###EZTOOL_REQUEST###";
@@ -101,6 +124,70 @@ public class ToolExecutionProperties {
         }
     }
     
+    /**
+     * Container settings applied when python.sandbox=DOCKER.
+     *
+     * Defaults are deliberately restrictive. Loosen them per-deployment rather than in code, and
+     * treat any relaxation of network/user/cap-drop as a security decision.
+     */
+    @Data
+    public static class DockerConfig {
+        private String binary = "docker";
+
+        /** Pin to a digest in production so the sandbox image cannot change underneath you. */
+        private String image = "python:3.11-slim";
+
+        /** "none" gives tool code no network. eztool() is unaffected - it runs over stdin/stdout. */
+        private String network = "none";
+
+        private String memory = "256m";
+
+        private String cpus = "0.5";
+
+        @Min(1)
+        private int pidsLimit = 64;
+
+        /** Unprivileged uid:gid inside the container. 65534 is nobody:nogroup. */
+        private String user = "65534:65534";
+
+        private boolean readOnly = true;
+
+        private String tmpfsSize = "16m";
+
+        /**
+         * Writable scratch directory inside the container, mounted noexec/nosuid on tmpfs.
+         * With --read-only this is the only place tool code can write, and it vanishes with the
+         * container.
+         */
+        private String workspace = "/workspace";
+
+        private String workspaceSize = "16m";
+
+        /**
+         * Hard wall-clock ceiling enforced INSIDE the container via coreutils `timeout`, independent
+         * of the host-side watchdog. Belt and braces: if the JVM watchdog thread is starved, the
+         * container still dies on its own.
+         */
+        @Min(1)
+        private int hardTimeoutSeconds = 60;
+
+        /** Grace period for `docker stop` before SIGKILL. */
+        @Min(0)
+        private int stopTimeoutSeconds = 5;
+
+        /**
+         * Host environment variables to forward into the container, by name. EMPTY BY DEFAULT.
+         *
+         * <p>A container inherits nothing from the host environment unless told to, which is one of
+         * the concrete advantages over running the interpreter as a child of this JVM - that path
+         * inherits every variable the JVM has, including provider API keys.
+         */
+        private java.util.List<String> envAllowlist = java.util.List.of();
+
+        /** Escape hatch for site-specific docker flags. Appended verbatim before the image name. */
+        private List<String> extraArgs = List.of();
+    }
+
     /**
      * JavaScript-specific configuration
      */
@@ -137,6 +224,33 @@ public class ToolExecutionProperties {
      */
     @Data
     public static class Security {
+
+        /**
+         * Enforce {@link #allowedOutboundHosts} for REST tools.
+         *
+         * <p>Previously an allowlist was computed and then deliberately ignored ("we'll allow but
+         * log"). A control that is evaluated and discarded is worse than none, because it reads
+         * as protection.
+         */
+        private boolean enforceOutboundAllowlist = true;
+
+        /**
+         * Hosts REST tools may contact. Matched on label boundaries: "api.github.com" permits
+         * "api.github.com" and "foo.api.github.com" but not "notapi.github.com".
+         */
+        private java.util.List<String> allowedOutboundHosts = java.util.List.of(
+                "jsonplaceholder.typicode.com",
+                "reqres.in",
+                "restcountries.com",
+                "api.github.com");
+
+        /**
+         * Request headers a REST tool may set. Anything else is dropped. Authorization is absent on
+         * purpose: a model-chosen Authorization header is a credential-forwarding primitive.
+         */
+        private java.util.List<String> allowedRequestHeaders = java.util.List.of(
+                "accept", "accept-language", "content-type", "user-agent", "x-request-id");
+
         private boolean validateEveryCall = true;
         
         private boolean logAllExecutions = true;

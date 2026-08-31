@@ -10,6 +10,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,9 +34,12 @@ public class AiRouterService {
     private String llamaUrl;
 
     private final RestTemplate restTemplate;
+    private final com.chatbot.agent.metrics.AgentMetrics metrics;
 
-    public AiRouterService(@Qualifier("restTemplate") RestTemplate restTemplate) {
+    public AiRouterService(@Qualifier("restTemplate") RestTemplate restTemplate,
+                           com.chatbot.agent.metrics.AgentMetrics metrics) {
         this.restTemplate = restTemplate;
+        this.metrics = metrics;
     }
 
     public String routeToAi(Model.ModelType modelType, String prompt) {
@@ -46,19 +50,49 @@ public class AiRouterService {
         }
     }
 
+    /** Total time this method may spend sleeping between attempts. */
+    private static final long MAX_RETRY_BUDGET_MS = 8_000;
+    private static final long BASE_BACKOFF_MS = 500;
+
+    /**
+     * Retry on 429 with bounded, jittered exponential backoff.
+     *
+     * <p>The previous implementation slept a flat 60 seconds per attempt, twice, so a rate-limited
+     * provider blocked the calling request thread for two minutes with no upper bound on how many
+     * threads could be parked that way. Backoff is now capped by {@link #MAX_RETRY_BUDGET_MS} in
+     * total, and jittered so that a fleet of retrying callers does not resynchronise into a
+     * thundering herd against a provider that is already overloaded.
+     */
     private String callAzureOpenAiWithRetry(String prompt, int maxRetries) {
-        int retries = 0;
-        while (retries < maxRetries) {
+        long sleptMs = 0;
+
+        for (int attempt = 0; attempt < maxRetries; attempt++) {
             try {
                 return callAzureOpenAi(prompt);
             } catch (HttpClientErrorException.TooManyRequests e) {
-                // Wait and retry
+                if (attempt == maxRetries - 1) {
+                    break;
+                }
+
+                long backoff = Math.min(BASE_BACKOFF_MS << attempt, MAX_RETRY_BUDGET_MS - sleptMs);
+                if (backoff <= 0) {
+                    break;
+                }
+                // Full jitter: sleep somewhere in [0, backoff).
+                long jittered = ThreadLocalRandom.current().nextLong(backoff + 1);
+
+                log.warn("Azure OpenAI returned 429; retrying attempt {} of {} after {}ms",
+                        attempt + 2, maxRetries, jittered);
                 try {
-                    Thread.sleep(60000); // Wait 60 seconds
-                } catch (InterruptedException ignored) {}
-                retries++;
+                    Thread.sleep(jittered);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted while backing off from Azure OpenAI", ie);
+                }
+                sleptMs += jittered;
             }
         }
+
         throw new RuntimeException("Exceeded max retries for Azure OpenAI due to rate limiting.");
     }
 
@@ -87,10 +121,10 @@ public class AiRouterService {
         String url = String.format("%s/openai/deployments/%s/chat/completions?api-version=2025-01-01-preview",
                 azureOpenAiUrl, deploymentName);
 
-        log.info("[requestId={}] AiRouterService.callAzureOpenAi request: url={}, body={}", requestId, url, request);
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.POST, entity, Map.class);
-        log.info("[requestId={}] AiRouterService.callAzureOpenAi response: {}", requestId, response.getBody());
+        log.info("[requestId={}] AiRouterService.callAzureOpenAi request: url={}", requestId, url);
+        ResponseEntity<Map> response = metrics.timeLlm("azure_openai", deploymentName, "chat_completion",
+                () -> restTemplate.exchange(url, HttpMethod.POST, entity, Map.class));
+        log.debug("[requestId={}] AiRouterService.callAzureOpenAi response received", requestId);
         return extractChatCompletionText(response.getBody());
     }
 
@@ -106,15 +140,15 @@ public class AiRouterService {
                 "{\"model\": \"llama2\", \"prompt\": \"%s\", \"stream\": false}", sanitizedPrompt
         );
 //        String requestBody = String.format("{\"text\": \"%s\"}", prompt);
-        log.info("[requestId={}] AiRouterService.callLlama request: url={}, body={}", requestId, url, requestBody);
-//        String response = restTemplate.postForObject(url, requestBody, String.class);
+        log.info("[requestId={}] AiRouterService.callLlama request: url={}", requestId, url);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
-        String response = restTemplate.postForObject(url, entity, String.class);
+        String response = metrics.timeLlm("ollama", "llama2", "generate",
+                () -> restTemplate.postForObject(url, entity, String.class));
 
-        log.info("[requestId={}] AiRouterService.callLlama response: {}", requestId, response);
+        log.debug("[requestId={}] AiRouterService.callLlama response received", requestId);
         return extractInnerJson(response);
     }
 
@@ -158,10 +192,10 @@ public class AiRouterService {
         String url = String.format("%s/openai/deployments/%s/chat/completions?api-version=2025-01-01-preview",
                 azureOpenAiUrl, deploymentName);
 
-        log.info("[requestId={}] AiRouterService.callAzureOpenAiWithContext request: url={}, body={}", requestId, url, request);
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.POST, entity, Map.class);
-        log.info("[requestId={}] AiRouterService.callAzureOpenAiWithContext response: {}", requestId, response.getBody());
+        log.info("[requestId={}] AiRouterService.callAzureOpenAiWithContext request: url={}", requestId, url);
+        ResponseEntity<Map> response = metrics.timeLlm("azure_openai", deploymentName, "chat_completion_rag",
+                () -> restTemplate.exchange(url, HttpMethod.POST, entity, Map.class));
+        log.debug("[requestId={}] AiRouterService.callAzureOpenAiWithContext response received", requestId);
         return extractChatCompletionText(response.getBody());
     }
 

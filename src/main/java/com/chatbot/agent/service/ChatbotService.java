@@ -82,17 +82,20 @@ public class ChatbotService {
     /**
      * Handle chat and return text response (backward compatibility)
      */
-    public String handleChat(Long chatbotId, String message) {
+    public String handleChat(Long chatbotId, String message,
+                             com.chatbot.agent.security.InvocationPrincipal principal) {
         log.info("Handling chat for chatbotId: {} with reasoning agent", chatbotId);
-        return reasoningAgentService.processQuery(chatbotId, message);
+        return reasoningAgentService.processQuery(chatbotId, message, principal);
     }
 
     /**
      * Handle chat and return structured response with citations
      */
-    public CitationModel.ResponseWithCitations handleChatWithCitations(Long chatbotId, String message) {
+    public CitationModel.ResponseWithCitations handleChatWithCitations(
+            Long chatbotId, String message,
+            com.chatbot.agent.security.InvocationPrincipal principal) {
         log.info("Handling chat with citations for chatbotId: {}", chatbotId);
-        return reasoningAgentService.processQueryWithCitations(chatbotId, message);
+        return reasoningAgentService.processQueryWithCitations(chatbotId, message, principal);
     }
 
     @Transactional

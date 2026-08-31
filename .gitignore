@@ -1,9 +1,56 @@
+# ============================================================================
+# Build output
+# ============================================================================
 target/
-.mvn/wrapper/maven-wrapper.jar
+build/
+bin/
+out/
 !**/src/main/**/target/
 !**/src/test/**/target/
+!**/src/main/**/build/
+!**/src/test/**/build/
+.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+*.war
+*.ear
 
-### STS ###
+# ============================================================================
+# Secrets and local configuration - NEVER COMMIT
+# ============================================================================
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+application-local.yml
+application-local.yaml
+application-local.properties
+application-secrets.yml
+application-secrets.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# ============================================================================
+# User data / uploads - may contain personal or customer content
+# ============================================================================
+uploads/
+*.docx
+*.pdf
+*.db
+
+# ============================================================================
+# IDE / editor
+# ============================================================================
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
 .apt_generated
 .classpath
 .factorypath
@@ -11,39 +58,20 @@ target/
 .settings
 .springBeans
 .sts4-cache
-
-### IntelliJ IDEA ###
-.idea
-*.iws
-*.iml
-*.ipr
-
-### NetBeans ###
 /nbproject/private/
 /nbbuild/
 /dist/
 /nbdist/
 /.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### VS Code ###
-.vscode/
-
-
-# .gitignore content for Java
-*.class
-*.log
-*.jar
-*.war
-*.ear
-target/
-bin/
-build/
-out/
-.idea/
-*.iml
-*.db
+# ============================================================================
+# OS / misc
+# ============================================================================
 .DS_Store
+*.log
 
+# ============================================================================
+# Security scan output (may quote matched secret material)
+# ============================================================================
+gitleaks-report.json
+trufflehog-report.json

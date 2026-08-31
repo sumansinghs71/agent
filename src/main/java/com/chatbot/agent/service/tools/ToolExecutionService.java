@@ -3,10 +3,15 @@ package com.chatbot.agent.service.tools;
 import com.chatbot.agent.config.DynamicDataSourceConfig;
 import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.exception.*;
+import com.chatbot.agent.metrics.AgentMetrics;
 import com.chatbot.agent.model.*;
 import com.chatbot.agent.repository.ToolRepository;
 import com.chatbot.agent.service.guardrails.RuntimeGuardrailsService;
 import com.chatbot.agent.service.guardrails.GuardrailLogService;
+import com.chatbot.agent.service.policy.PolicyDecision;
+import com.chatbot.agent.service.policy.ToolInvocationPolicy;
+import com.chatbot.agent.service.policy.RestHeaderPolicy;
+import com.chatbot.agent.security.InvocationPrincipal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -19,6 +24,7 @@ import org.springframework.web.client.RestTemplate;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,6 +52,8 @@ public class ToolExecutionService {
     private final ObjectMapper objectMapper;
     private final ToolExecutionProperties config;
     private final DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager;
+    private final AgentMetrics metrics;
+    private final ToolInvocationPolicy policy;
 
     public ToolExecutionService(
             ExecutionContextFactory contextFactory,
@@ -57,8 +65,12 @@ public class ToolExecutionService {
             RestTemplate restTemplate,
             ObjectMapper objectMapper,
             ToolExecutionProperties config,
-            DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager) {
+            DynamicDataSourceConfig.DynamicDataSourceManager dataSourceManager,
+            AgentMetrics metrics,
+            ToolInvocationPolicy policy) {
 
+        this.metrics = metrics;
+        this.policy = policy;
         this.contextFactory = contextFactory;
         this.toolRegistry = toolRegistry;
         this.toolRepository = toolRepository;
@@ -84,20 +96,36 @@ public class ToolExecutionService {
      * @param request   Tool execution request
      * @return Execution result
      */
+    /**
+     * @deprecated a bare user id carries no roles, so the resulting principal can invoke nothing and
+     * every call will be denied with {@code INSUFFICIENT_AUTHORITY}. Retained only so existing tests
+     * and callers fail closed rather than failing to compile into an unchecked path. Use
+     * {@link #executeTool(Long, InvocationPrincipal, ToolModel.ToolExecutionRequest)}.
+     */
+    @Deprecated
     public ToolExecutionResult executeTool(Long chatbotId, String userId, ToolModel.ToolExecutionRequest request) {
+        return executeTool(chatbotId, InvocationPrincipal.of(userId), request);
+    }
+
+    /**
+     * Main entry point. The {@link InvocationPrincipal} is the authority the invocation is made on
+     * behalf of and is required - there is no ambient-identity path.
+     */
+    public ToolExecutionResult executeTool(Long chatbotId, InvocationPrincipal principal,
+                                           ToolModel.ToolExecutionRequest request) {
 
         long startTime = System.currentTimeMillis();
 
         // Create context with try-with-resources for automatic cleanup
-        try (ExecutionContext context = contextFactory.create(chatbotId, userId)) {
+        try (ExecutionContext context = contextFactory.create(chatbotId, principal)) {
 
             try {
                 // Set MDC for logging
                 MDC.put("executionId", context.getExecutionId());
                 MDC.put("chatbotId", String.valueOf(chatbotId));
-                MDC.put("userId", userId);
+                MDC.put("userId", principal.getName());
 
-                log.info("Starting tool execution: {} for user: {}", request.getFuncNameKey(), userId);
+                log.info("Starting tool execution: {} for principal: {}", request.getFuncNameKey(), principal);
 
                 // Execute the tool with context
                 ToolExecutionResult result = executeToolInternal(context, request);
@@ -192,9 +220,45 @@ public class ToolExecutionService {
         // Register this tool call in context
         context.registerToolCall(toolId);
 
+        // Timed here rather than in executeTool() so nested eztool() calls are attributed to the
+        // tool that actually ran, not just the outermost one.
+        long startedAt = System.currentTimeMillis();
+        String functionType = null;
+
         try {
-            // Get tool from registry (with caching)
-            ToolModel.Tool tool = toolRegistry.getTool(context.getChatbotId(), toolId);
+            // Resolve the tool. A miss is not thrown here: it is handed to the policy so that
+            // "unknown tool" is recorded as an explicit denial like every other refusal.
+            ToolModel.Tool tool = null;
+            try {
+                tool = toolRegistry.getTool(context.getChatbotId(), toolId);
+            } catch (ToolNotFoundException e) {
+                log.debug("[executionId={}] Tool '{}' not found; deferring to policy",
+                        context.getExecutionId(), toolId);
+            }
+
+            // ================= AUTHORITY GATE =================
+            // Nothing below this point runs on the model's say-so. Applies to nested eztool()
+            // calls too, because every nested call re-enters this method.
+            PolicyDecision decision = policy.evaluate(
+                    tool, toolId, context.getChatbotId(), context.getPrincipal(), request.getParams());
+
+            metrics.recordPolicyDecision(toolId, decision.reason(), decision.allowed());
+
+            if (!decision.allowed()) {
+                log.warn("[executionId={}] POLICY DENY tool={} reason={} principal={} detail={}",
+                        context.getExecutionId(), toolId, decision.reason(),
+                        context.getPrincipal().getName(), decision.detail());
+                throw new ToolAuthorizationException(
+                        "Tool invocation denied: " + decision.detail(),
+                        toolId, decision.reason(), context.getCallChainList());
+            }
+
+            log.info("[executionId={}] POLICY ALLOW tool={} sideEffect={} principal={}",
+                    context.getExecutionId(), toolId, decision.sideEffect(),
+                    context.getPrincipal().getName());
+            // ==================================================
+
+            functionType = tool.getFunctionType().name();
 
             // Check timeout before execution
             context.checkTimeout();
@@ -210,9 +274,19 @@ public class ToolExecutionService {
                 case JAVASCRIPT -> executeJavaScriptTool(context, tool, params);
             };
 
+            metrics.recordToolExecution(toolId, functionType, AgentMetrics.OUTCOME_SUCCESS,
+                    context.getChatbotId(), System.currentTimeMillis() - startedAt);
+
             return ToolExecutionResult.success(data);
 
         } catch (Exception e) {
+            String errorCode = errorCodeOf(e);
+            metrics.recordToolExecution(toolId, functionType,
+                    (e instanceof ToolExecutionTimeoutException)
+                            ? AgentMetrics.OUTCOME_TIMEOUT : AgentMetrics.OUTCOME_ERROR,
+                    context.getChatbotId(), System.currentTimeMillis() - startedAt);
+            metrics.recordToolError(toolId, errorCode);
+
             // Unregister with error
             context.unregisterToolCallWithError(toolId, e.getMessage());
             throw e;
@@ -226,6 +300,20 @@ public class ToolExecutionService {
                 context.unregisterToolCall(toolId);
             }
         }
+    }
+
+    /**
+     * Map an exception to a stable, low-cardinality metric tag.
+     * Deliberately never uses the exception message - that would explode tag cardinality.
+     */
+    private String errorCodeOf(Exception e) {
+        if (e instanceof ToolExecutionException te && te.getErrorCode() != null) {
+            return te.getErrorCode();
+        }
+        if (e instanceof ToolAuthorizationException tae) return "TOOL_DENIED_" + tae.getReason();
+        if (e instanceof SecurityException) return "GUARDRAIL_BLOCKED";
+        if (e instanceof IllegalArgumentException) return "INVALID_PARAMETERS";
+        return e.getClass().getSimpleName();
     }
 
     /**
@@ -429,9 +517,20 @@ public class ToolExecutionService {
         String url = replacePlaceholders(tool.getHttpPath(), params);
         HttpHeaders headers = new HttpHeaders();
         if (tool.getHttpHeaders() != null) {
+            RestHeaderPolicy headerPolicy =
+                    new RestHeaderPolicy(config.getSecurity().getAllowedRequestHeaders());
+
             for (Map.Entry<String, String> entry : tool.getHttpHeaders().entrySet()) {
+                String name = entry.getKey();
+                if (!headerPolicy.isAllowed(name)) {
+                    log.warn("[requestId={}] Dropping non-allowlisted request header '{}' on tool {}",
+                            requestId, name, tool.getFuncNameKey());
+                    continue;
+                }
+
                 String value = replacePlaceholders(entry.getValue(), params);
-                headers.add(entry.getKey(), value);
+                headerPolicy.requireSafe(name, value);
+                headers.add(name, value);
             }
         }
 

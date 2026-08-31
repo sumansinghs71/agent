@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, DAG, development ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile, test, coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Compile
+        run: ./mvnw -B -ntp compile
+
+      # Unit + Spring context tests. The Docker adversarial suite is @EnabledIf(dockerAvailable)
+      # and runs in security.yml, where the daemon is guaranteed and the runtime budget is larger.
+      - name: Test
+        run: ./mvnw -B -ntp verify
+
+      - name: Coverage report
+        run: ./mvnw -B -ntp jacoco:report
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          REPORT=target/site/jacoco/jacoco.csv
+          if [ ! -f "$REPORT" ]; then echo "No coverage report produced." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          echo "### Coverage (baseline — no gate yet)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package | Line cov | Branch cov |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          awk -F, 'NR>1 {lm[$2]+=$8; lc[$2]+=$9; bm[$2]+=$6; bc[$2]+=$7}
+                   END {for (p in lm) {
+                     lt=lm[p]+lc[p]; bt=bm[p]+bc[p];
+                     printf "| %s | %.1f%% | %s |\n", p,
+                       (lt? 100*lc[p]/lt : 0),
+                       (bt? sprintf("%.1f%%", 100*bc[p]/bt) : "n/a") }}' "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 14
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # -Xlint with -Werror would fail on pre-existing warnings across the tree; surface them
+      # instead and tighten once the backlog is cleared.
+      - name: Compiler warnings
+        run: ./mvnw -B -ntp clean compile -Dmaven.compiler.showWarnings=true
+
+  dependency-scan:
+    name: Dependency vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Resolve dependencies
+        run: ./mvnw -B -ntp dependency:go-offline
+
+      # Scans the built dependency tree. Informational for now: this repository has never had a
+      # vulnerability baseline, so failing the build on first run would block every PR. Promote to
+      # a gate once the initial findings are triaged.
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          format: table

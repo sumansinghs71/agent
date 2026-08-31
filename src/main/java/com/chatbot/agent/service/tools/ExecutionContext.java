@@ -4,6 +4,7 @@ import com.chatbot.agent.config.ToolExecutionProperties;
 import com.chatbot.agent.exception.*;
 import com.chatbot.agent.model.ExecutionMetadata;
 import com.chatbot.agent.model.ToolCallInfo;
+import com.chatbot.agent.security.InvocationPrincipal;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
@@ -27,6 +28,12 @@ public class ExecutionContext implements AutoCloseable {
     private final String executionId;
     private final Long chatbotId;
     private final String userId;
+    /**
+     * The authority every tool call in this chain is made on behalf of. Held on the context so that
+     * nested eztool() calls are evaluated against the same principal as the outermost call - a
+     * nested call must never gain authority the original caller did not have.
+     */
+    private final InvocationPrincipal principal;
     private final String requestId;
     private final LocalDateTime createdAt;
     
@@ -63,10 +70,16 @@ public class ExecutionContext implements AutoCloseable {
      * @param config Configuration properties
      */
     public ExecutionContext(Long chatbotId, String userId, String requestId, ToolExecutionProperties config) {
+        this(chatbotId, InvocationPrincipal.of(userId), requestId, config);
+    }
+
+    public ExecutionContext(Long chatbotId, InvocationPrincipal principal, String requestId,
+                            ToolExecutionProperties config) {
         this.requestId = requestId;
         this.executionId = UUID.randomUUID().toString();
         this.chatbotId = chatbotId;
-        this.userId = userId;
+        this.principal = principal;
+        this.userId = principal.getName();
         this.config = config;
         this.createdAt = LocalDateTime.now();
         
@@ -105,8 +118,10 @@ public class ExecutionContext implements AutoCloseable {
         lock.lock();
         try {
             checkNotClosed();
-            //checkTimeout();
-            
+            // Re-enabled: was commented out in 1a5f39f, which disabled aggregate-timeout
+            // enforcement at the point a new tool call enters the chain.
+            checkTimeout();
+
             // Check max total calls
             totalToolCalls++;
             if (totalToolCalls > maxTotalCalls) {
@@ -489,6 +504,7 @@ public class ExecutionContext implements AutoCloseable {
     public String getExecutionId() { return executionId; }
     public Long getChatbotId() { return chatbotId; }
     public String getUserId() { return userId; }
+    public InvocationPrincipal getPrincipal() { return principal; }
     public String getRequestId() { return requestId; }
     public int getTotalToolCalls() { return totalToolCalls; }
     public ExecutionMetadata.ExecutionState getState() { return state; }
