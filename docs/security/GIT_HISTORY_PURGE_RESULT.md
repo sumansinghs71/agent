@@ -112,6 +112,20 @@ git clone https://github.com/sumansinghs71/agent.git ~/work/agent-verify
 
 ---
 
+## Current status update — 2026-08-31
+
+The two ordinary remote branches described in §5.1 were subsequently reviewed,
+backed up locally, and deleted after authorization.
+
+A fresh-clone scan of all ordinary remote heads now reports no S1/S2/S3 leaks.
+
+The GitHub-managed `refs/pull/*` references described in §5.2 remain the only
+known repository-hosted stale references containing historical secret-bearing
+objects.
+
+The sections below are preserved unchanged as the historical record of the
+2026-08-30 purge operation.
+
 ## 5. What is NOT cleaned, and why
 
 ### 5.1 Two branches outside the authorization (BLOCKING — needs a decision)
