@@ -17,6 +17,6 @@ updates:
     directory: "/"
     schedule: { interval: weekly }
 
-  - package-ecosystem: docker
-    directory: "/"
-    schedule: { interval: weekly }
+  # No docker ecosystem entry: this repository has no Dockerfile. The sandbox image is referenced
+  # from application configuration, which Dependabot cannot track, so the entry only produced
+  # failing update jobs. Image currency is handled by the digest-pinning warning at startup.
