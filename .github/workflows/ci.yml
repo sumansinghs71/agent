@@ -97,8 +97,12 @@ jobs:
       # Scans the built dependency tree. Informational for now: this repository has never had a
       # vulnerability baseline, so failing the build on first run would block every PR. Promote to
       # a gate once the initial findings are triaged.
+      # Pinned to a commit SHA, not a tag. A tag is mutable, and a security-scanning action that
+      # can be silently repointed is a supply-chain hole in the very job meant to close one.
+      # (The original reference here was `@0.24.0`, a version that has never existed - the tags are
+      # v-prefixed - so the job failed to resolve and never ran.)
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
