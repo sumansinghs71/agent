@@ -38,7 +38,8 @@ unauthenticated caller to POST a tool containing arbitrary Python and then execu
 | Evaluation harness | none | 11 scenarios + deterministic failure injection |
 | Observability | Micrometer only | OpenTelemetry spans, redacted JSON logs, failure-layer attribution |
 | Benchmarks | none | JMH + integration harness, measured |
-| Tests | 17 | 305 |
+| Multi-agent ablation | none | measured; single-agent won |
+| Tests | 17 | 310 |
 | Spring context test | commented out | present — and it immediately found a config bug that stopped the app booting |
 
 **M2 (durable runtime) is complete.** Runs are persisted before execution, nodes are claimed by
@@ -50,7 +51,10 @@ dead scheduler is completed by another without re-executing finished work.
 graph the runtime owns; one unauthorised step rejects the whole plan. MCP is the real protocol, not
 a custom JSON API given the name.
 
-**Not built yet:** multi-agent coordination and the single-vs-multi-agent ablation. **No performance number of any kind has been measured** — see
+**Measured and published:** the single-vs-multi-agent ablation. The supervisor pattern **lost** —
+4.0x the model calls and 3.2x the tokens for identical work and identical recovery. The result is
+published because that is what the measurement says; see
+[MULTI_AGENT_ABLATION.md](docs/MULTI_AGENT_ABLATION.md). **No performance number of any kind has been measured** — see
 [METRICS.md](METRICS.md) for what is and is not evidenced, and
 [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what is only partially done.
 
@@ -158,6 +162,7 @@ Stated plainly, because a security posture you cannot describe is one you do not
 | [TOOL_AND_MCP.md](docs/TOOL_AND_MCP.md) | Tool contract, schema validation, MCP, approvals |
 | [EVALUATIONS.md](docs/EVALUATIONS.md) | Failure injection, scenario results, and the negative controls |
 | [PERFORMANCE.md](docs/PERFORMANCE.md) | Measured benchmarks, with error bars and what is not measured |
+| [MULTI_AGENT_ABLATION.md](docs/MULTI_AGENT_ABLATION.md) | Single vs multi-agent, measured — and why single-agent won |
 | [observability/](observability/) | Grafana dashboard, cardinality rule, failure-layer attribution |
 | [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | What this system does not do |
 | [METRICS.md](METRICS.md) | Every claim mapped to a command, artifact and observed result |

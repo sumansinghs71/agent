@@ -1,0 +1,11 @@
+scenario,arm,success,duration_ms,model_calls,tokens,tool_calls,retries,coordination_failures
+injected-http-500,single-agent,true,86,1,520,2,1,0
+injected-http-500,multi-agent,true,38,4,1660,2,1,0
+happy-path-3-steps,single-agent,true,37,1,520,3,0,0
+happy-path-3-steps,multi-agent,true,34,4,1660,3,0,0
+scale-1,single-agent,true,16,1,520,1,0,0
+scale-1,multi-agent,true,18,4,1660,1,0,0
+scale-5,single-agent,true,52,1,520,5,0,0
+scale-5,multi-agent,true,48,4,1660,5,0,0
+scale-10,single-agent,true,88,1,520,10,0,0
+scale-10,multi-agent,true,84,4,1660,10,0,0

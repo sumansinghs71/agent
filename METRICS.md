@@ -114,11 +114,27 @@ All measurements are **local reproducible benchmark results** on one developer m
 (Apple M2, 8 cores, 16 GB, JDK 21, Docker 20.10.21) recorded in
 `benchmarks/results/environment.json`. They are not a production capacity measurement.
 
+## Single-agent vs multi-agent
+
+| Claim | Metric | Command | Artifact | Observed |
+|---|---|---|---|---|
+| Multi-agent costs more model calls for identical work | model calls | `./mvnw test -Dtest=SingleVsMultiAgentAblationTest` | `evals/ablation/ablation.csv` | **5 vs 20 (4.0x)** |
+| Multi-agent costs more tokens | tokens | same | same | **2,600 vs 8,300 (3.2x)** |
+| Both arms perform identical tool calls | tool calls | same | same | **identical in all 5 scenarios** |
+| Recovery came from the runtime, not the diagnostic agent | retries | same | same | **1 retry in BOTH arms** |
+| Coordination overhead does not amortise with plan size | model calls by size | same | same | **flat 4 calls at 1, 5 and 10 steps** |
+| Delegation depth and cycles are bounded | coordination failures | same | same | `DEPTH_EXCEEDED`, `EMPTY_HANDOFF` raised as required |
+
+**The multi-agent arm lost on every scenario measured.** Published because that is what the
+measurement says. See [docs/MULTI_AGENT_ABLATION.md](docs/MULTI_AGENT_ABLATION.md), including why:
+the durable runtime already provides retry, recovery and authority separation beneath both arms, so
+the coordination layer duplicates them at three extra model calls per run.
+
 ## Build, tests, coverage
 
 | Metric | Command | Observed |
 |---|---|---|
-| Total tests | `./mvnw clean verify` | **305, 0 failures, 0 errors** |
+| Total tests | `./mvnw clean verify` | **310, 0 failures, 0 errors** |
 | Coverage, overall | JaCoCo | **42.6%** |
 | Coverage, `runtime.model` | JaCoCo | **100.0%** |
 | Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
