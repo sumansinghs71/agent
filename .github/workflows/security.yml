@@ -29,9 +29,11 @@ jobs:
           gitleaks detect --no-git --source . --config .gitleaks.toml --redact --verbose
 
   secret-scan-history:
-    name: Secret scan (full history) — INFORMATIONAL
+    name: Secret scan (full history) — GATE
     runs-on: ubuntu-latest
-    continue-on-error: true      # expected to fail until the history purge is executed
+    # Promoted from informational to a hard gate. It was allowed to fail while two automation
+    # branches still carried the pre-purge secrets; those branches have been deleted and a fresh
+    # clone now scans clean across all remote heads, so a failure here is a real regression.
     steps:
       - uses: actions/checkout@v4
         with:

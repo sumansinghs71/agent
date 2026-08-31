@@ -28,4 +28,11 @@ paths = [
   '''\.env\.example$''',
   '''^docs/security/''',
   '''^target/''',
+  # A test that proves credential redaction works must contain credential-SHAPED strings, or it
+  # proves nothing. These are canonical documentation examples (AKIAIOSFODNN7EXAMPLE, the jwt.io
+  # sample token) and placeholder literals - none is a real credential.
+  #
+  # Scoped to this single file on purpose. Allowlisting the rule globally, or weakening the test to
+  # get a green scan, would trade a real control for a green tick.
+  '''^src/test/java/com/chatbot/agent/observability/LogRedactorTest\.java$''',
 ]
