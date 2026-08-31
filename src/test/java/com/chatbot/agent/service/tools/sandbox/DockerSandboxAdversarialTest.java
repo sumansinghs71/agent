@@ -50,13 +50,19 @@ class DockerSandboxAdversarialTest {
     private Path hostSecretFile;
     private String hostSecretValue;
 
-    static boolean dockerAvailable() {
-        try {
-            Process p = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
-            return p.waitFor(20, TimeUnit.SECONDS) && p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
+    /** Probed once and cached: two independent probes can disagree under load. */
+    private static volatile Boolean dockerAvailable;
+
+    static synchronized boolean dockerAvailable() {
+        if (dockerAvailable == null) {
+            try {
+                Process p = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
+                dockerAvailable = p.waitFor(60, TimeUnit.SECONDS) && p.exitValue() == 0;
+            } catch (Exception e) {
+                dockerAvailable = false;
+            }
         }
+        return dockerAvailable;
     }
 
     @BeforeAll

@@ -28,19 +28,42 @@ public abstract class AbstractPostgresTest {
     protected static JdbcTemplate jdbc;
     protected RunRepository repo;
 
-    public static boolean dockerAvailable() {
-        try {
-            Process p = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
-            return p.waitFor(20, TimeUnit.SECONDS) && p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
+    /**
+     * Probed ONCE and cached.
+     *
+     * <p>Previously this shelled out to {@code docker info} on every call, and JUnit calls it both
+     * for {@code @EnabledIf} and again inside {@code @BeforeAll}. Under load - another suite using
+     * the daemon concurrently - the second probe could time out while the first had succeeded, so
+     * the class was enabled but the container was never started, leaving {@code jdbc} null and
+     * every test failing with a NullPointerException.
+     *
+     * <p>A single cached probe makes the two decisions agree by construction.
+     */
+    private static volatile Boolean dockerAvailable;
+
+    public static synchronized boolean dockerAvailable() {
+        if (dockerAvailable == null) {
+            try {
+                Process p = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
+                dockerAvailable = p.waitFor(60, TimeUnit.SECONDS) && p.exitValue() == 0;
+            } catch (Exception e) {
+                dockerAvailable = false;
+            }
         }
+        return dockerAvailable;
     }
 
     @BeforeAll
     static void startDatabase() {
-        if (!dockerAvailable() || postgres != null) {
+        if (postgres != null) {
             return;
+        }
+        // Reaching @BeforeAll means @EnabledIf already decided Docker is available. If the container
+        // then fails to start, fail loudly: silently returning leaves `jdbc` null and every test in
+        // the class dies with an unrelated NullPointerException, which hides the real cause.
+        if (!dockerAvailable()) {
+            throw new IllegalStateException(
+                    "Docker was reported available but is not; refusing to run with a null datasource");
         }
         postgres = new PostgreSQLContainer<>("postgres:16-alpine")
                 .withDatabaseName("agent_runtime")
@@ -60,6 +83,15 @@ public abstract class AbstractPostgresTest {
         Flyway.configure().dataSource(ds).locations("classpath:db/migration").load().migrate();
 
         jdbc = new JdbcTemplate(ds);
+    }
+
+    @BeforeEach
+    void requireDatabase() {
+        if (jdbc == null) {
+            throw new IllegalStateException(
+                    "PostgreSQL was not started. This class is @EnabledIf(dockerAvailable) and must "
+                    + "not reach a test method without a live container.");
+        }
     }
 
     @BeforeEach
