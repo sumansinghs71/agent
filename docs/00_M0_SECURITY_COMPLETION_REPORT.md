@@ -1,5 +1,7 @@
 # M0 — Security Containment: Completion Report
 
+## STATUS: **VERIFIED COMPLETE** (remote CI green, 2026-08-30)
+
 **Date:** 2026-08-30 · **Branch:** `DAG` · **Baseline commit:** `9d5c4e8`
 **Scope:** M0.1 – M0.12. No DAG, MCP, multi-agent, RAG, evaluation, or portfolio work was started.
 
@@ -9,8 +11,8 @@
 
 | # | Question | Answer | Evidence |
 |---|---|---|---|
-| 1 | Real credentials in **HEAD**? | ⚠️ **Yes — in the last *commit*; no, in the working tree.** All M0 changes are uncommitted. `git grep` against `HEAD` still finds both. **Committing this work resolves it.** | §6 |
-| 2 | Real credentials in **git history**? | ❌ **Yes** — 4 findings, 2 secrets, 4 commits. Purge planned, not executed, awaiting approval. Owner has rotated both. | `SECRET_SCAN_REPORT.md` §4 |
+| 1 | Real credentials in **HEAD**? | ✅ **No.** Committed as `b2a6a99`, rewritten to `a0a0b7c`. Verified from a fresh clone. | §6 |
+| 2 | Real credentials in **git history**? | ⚠️ **Not on the 5 authorized branches** — verified clean from a fresh clone (20 commits scanned, no leaks). **Still present on 2 branches outside the authorized scope and on 7 GitHub-managed PR refs.** | `GIT_HISTORY_PURGE_RESULT.md` §5 |
 | 3 | Can **unauthenticated** callers create tools? | ✅ **No** — 401 | `ApiSecurityTest.anonymousCannotCreateTool` |
 | 4 | Can **unauthenticated** callers execute tools? | ✅ **No** — 401 on both routes | `ApiSecurityTest.anonymousCannotExecuteTool`, `…ViaChatbotRoute` |
 | 5 | Does **LOCAL** execution start by default? | ✅ **No** — default is `DOCKER`; `LOCAL` throws at startup without an explicit opt-in | `SandboxModeStartupTest` (6) |
@@ -18,10 +20,11 @@
 | 7 | Can code read **host files**? | ✅ **No** — host marker unreadable, host accounts invisible | #2, #2b |
 | 8 | Can code read **host secrets**? | ✅ **No** — no host env value crosses the boundary | #4, #4b |
 | 9 | Are **time and resource limits** enforced? | ✅ **Yes** — wall clock, memory, PIDs, CPU, output | #5/8, #6, #7, #10 |
-| 10 | Does **CI** pass? | ⚠️ **Locally yes** — `./mvnw clean verify` → 113/113. Workflows are authored but **have never executed on GitHub**, because nothing is pushed. | §3 |
+| 10 | Does **CI** pass? | ✅ **Yes, on GitHub.** Both workflows conclude `success` at `1666c92`. The Docker adversarial suite genuinely executed on the runner — the workflow contains a step that fails if it silently skips. | §3.1 |
 
-**P0 status: no P0 answer is unsafe.** Items 1, 2 and 10 are open, and all three are resolved by
-actions that require your decision — committing, approving the purge, and pushing.
+**P0 status: no P0 answer is unsafe.** Item 2 is partially open: two branches discovered on the
+remote after the purge plan was written, plus seven read-only pull-request refs, still carry the
+values. Neither is fixable within the authorization given. See `GIT_HISTORY_PURGE_RESULT.md` §5.
 
 ---
 
@@ -104,6 +107,44 @@ a number chosen today would either be trivially met or block every PR.
 
 ---
 
+## 3.1 Remote CI evidence
+
+Commit `1666c92` on `DAG`.
+
+| Workflow | Conclusion | Run |
+|---|---|---|
+| CI | ✅ success | https://github.com/sumansinghs71/agent/actions/runs/33354012587 |
+| Security | ✅ success | https://github.com/sumansinghs71/agent/actions/runs/33354012585 |
+
+| Job | Result |
+|---|---|
+| Compile, test, coverage | ✅ success |
+| Dependency vulnerabilities (Trivy) | ✅ success |
+| Static analysis | ✅ success |
+| **Sandbox adversarial suite** | ✅ **success — genuinely ran** |
+| Secret scan (working tree) — GATE | ✅ success |
+| CodeQL (security-extended) | ✅ success |
+| Secret scan (full history) — INFORMATIONAL | ❌ fails by design — see below |
+
+**On the adversarial suite actually running.** `@EnabledIf(dockerAvailable)` means a runner without a
+Docker daemon would SKIP these tests and the job would still report green — a security suite that
+reports success without executing is worse than no suite. The workflow therefore asserts the daemon
+is reachable before running, and afterwards parses the surefire report and fails if the expected
+number of tests did not run. Both steps passed.
+
+**On the failing informational job.** The full-history scan fails because two branches outside the
+authorized purge scope still contain the secrets. It is marked `continue-on-error`, so the workflow
+still concludes success, and it is left failing deliberately: it is an accurate signal of an
+incomplete purge and should go green only when the purge is genuinely finished.
+
+## 3.2 Fresh-clone reproduction
+
+```bash
+git clone https://github.com/sumansinghs71/agent.git && cd agent && git checkout DAG
+./mvnw clean verify        # → Tests run: 113, Failures: 0, Errors: 0
+```
+Verified: **113 run, 0 failures, 0 errors** from a clean clone of the rewritten remote.
+
 ## 4. Defects found *while doing* M0
 
 Four real bugs, none of which were in the Phase-0 audit — each surfaced only by writing a test that
@@ -147,9 +188,9 @@ file is test setup. `agent.sql` is pure DDL for the application's own schema. `a
 
 | # | Risk | Severity | Owner |
 |---|---|---|---|
-| 1 | **M0 is uncommitted.** Every fix lives in the working tree; `HEAD` still contains both secrets and `permitAll()`. | **High** | Say the word and I will commit. |
-| 2 | **Secrets remain in git history.** Purge prepared, not executed. Rotation — already done — is the real control. | Medium | Approval gate |
-| 3 | **CI has never run.** Workflows are authored but unexecuted; YAML is unvalidated against the real runner. | Medium | Resolved by first push |
+| 1 | **Two branches outside the authorized scope still carry S1/S2** (`claude/analyze-repository-deep-…`, `claude/daily-coding-java-questions-…`). A fresh clone fetches them, so a full-history scan still reports leaks. Clean rewritten versions exist locally; one push finishes it once authorized. | **Medium-High** | Owner decision |
+| 2 | **Seven `refs/pull/*` refs carry S1/S2 and cannot be altered by any push.** GitHub Support must garbage-collect them. | Medium | GitHub Support |
+| 3 | **A third secret (S3, an Azure Search key) was found in history** during the purge — not by the audit, not by gitleaks. Purged from the authorized branches. Should be rotated if it has not been. | Medium | Owner |
 | 4 | **Prompt injection is unmitigated.** Documents and tool descriptions reach the planner unchecked. The authority gate limits blast radius; it does not stop the injection. | Medium | M2/M3 |
 | 5 | **JavaScript has no resource limits.** Contained against host access, but a tight loop holds a pool thread until JVM restart. Ten such tools exhaust tool execution. | Medium | M4 |
 | 6 | **DNS rebinding defeats the SSRF guard.** Needs address pinning in the connection. | Low–Medium | M3 |
