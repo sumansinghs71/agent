@@ -222,6 +222,30 @@ public class AgentMetrics {
                 .increment();
     }
 
+    /** Sandbox admission control: saturation and refusals. */
+    public void recordSandboxConcurrency(int active, int waiting, int capacity) {
+        registry.gauge("tool.sandbox.active", active);
+        registry.gauge("tool.sandbox.waiting", waiting);
+        registry.gauge("tool.sandbox.capacity", capacity);
+    }
+
+    public void recordSandboxRejected(String kind) {
+        Counter.builder("tool.sandbox.rejected")
+                .description("Executions refused because the sandbox pool was saturated")
+                .tag("kind", safe(kind))
+                .register(registry)
+                .increment();
+    }
+
+    /** JavaScript resource-limit terminations, by which bound was hit. */
+    public void recordJsLimitExceeded(String limit) {
+        Counter.builder("tool.js.limit.exceeded")
+                .description("JavaScript executions terminated by a resource bound")
+                .tag("limit", safe(limit))
+                .register(registry)
+                .increment();
+    }
+
     public void recordGuardrailViolation(String stage, String violationType, String severity) {
         Counter.builder("guardrail.violation")
                 .description("Requests blocked or flagged by guardrails")

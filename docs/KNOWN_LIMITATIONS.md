@@ -9,9 +9,9 @@ described is not a posture, and a capability list without its complement reads a
 |---|---|
 | **Docker is not a microVM** | The sandbox shares the host kernel. A kernel or container-runtime vulnerability defeats it entirely. This must never be described as equivalent to gVisor or Firecracker isolation. The `PythonSandbox` SPI exists so such an adapter could be added if that threat model were required. |
 | **The code denylist is lint, not a boundary** | Behavioural testing found that 9 of 10 candidate payloads pass it — `importlib.import_module('os')`, whitespace variants, stdlib re-exports. It is retained as defence-in-depth and named `lintPythonCodeBestEffort` so it cannot be mistaken for containment. |
-| **Sandbox image is tag-pinned, not digest-pinned** | A compromised upstream `python:3.11-slim` tag is not defended against. Pinning by digest is a one-line change and is recommended before any real deployment. |
-| **No global container concurrency cap** | Per-container limits hold, but many simultaneous executions can still exhaust host resources. |
-| **JavaScript has no resource limits** | GraalJS is contained against host access — `Java` is undefined under JSR-223, verified — but has no CPU, memory or statement limit. A tight loop holds a thread-pool slot until the JVM restarts. |
+| **Sandbox image ships tag-pinned** | The default is a tag, which upstream can repoint. Startup warns while a tag is configured, and the resolved digest is recorded in `application.yml` for production use. This warns rather than refuses, because requiring a digest would break every developer running a locally built image. |
+| **Sandbox concurrency is capped per process, not per host** | `SandboxConcurrencyLimiter` bounds executions in flight within one JVM. Several JVMs against one Docker daemon are not coordinated. |
+| **JavaScript memory is not directly capped** | Statement limit and wall clock bound CPU, and unbounded allocation is terminated in practice by whichever fires first. There is no explicit heap ceiling per execution, so a script allocating quickly within its statement budget can still pressure the JVM heap. |
 
 ## Network
 

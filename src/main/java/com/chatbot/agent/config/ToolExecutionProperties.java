@@ -193,6 +193,22 @@ public class ToolExecutionProperties {
      */
     @Data
     public static class JavaScriptConfig {
+
+        /**
+         * Statement budget for one JavaScript execution.
+         *
+         * <p>The bound that actually stops a tight loop. A wall-clock timeout cannot: cancelling a
+         * thread stuck in {@code while(true){}} requires the guest runtime's cooperation, and
+         * {@code Future.cancel} does not have it. GraalJS counts statements and raises a cancellation
+         * the engine itself honours, verified to fire in ~330ms for 200k statements.
+         */
+        @Min(1000)
+        private long statementLimit = 10_000_000;
+
+        /** Cap on characters a script may return, so a result cannot exhaust the caller's heap. */
+        @Min(1024)
+        private int maxOutputChars = 1_000_000;
+
         private ExecutorType executorType = ExecutorType.GRAALVM_BINDING;
         
         @Min(1)
@@ -299,7 +315,22 @@ public class ToolExecutionProperties {
      * Performance settings
      */
     @Data
-    public static class Performance { // Future feature
+    public static class Performance {
+
+        /**
+         * Ceiling on code executions in flight across ALL sandboxes, Python and JavaScript together.
+         *
+         * <p>Per-execution limits bound one container; nothing bounded how many could exist at once,
+         * so a wide graph of individually well-behaved nodes could still exhaust host memory and
+         * CPU. Work beyond this limit queues briefly and is then rejected rather than admitted.
+         */
+        @Min(1)
+        private int maxConcurrentSandboxes = 8;
+
+        /** How long a sandbox execution waits for a slot before being rejected. */
+        @Min(0)
+        private long sandboxQueueTimeoutMs = 10_000;
+ // Future feature
         
         @Min(1)
         private int threadPoolSize = 10;

@@ -76,7 +76,11 @@ tool-execution:
 
     docker:
       binary: "docker"
-      image: "python:3.11-slim"    # pin to a digest in production
+      # Pinned by TAG for development convenience. A tag can be repointed upstream without any
+      # change here, so production must pin by digest; startup warns while this is a tag.
+      # Digest resolved 2026-08-31 (linux/arm64):
+      #   python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6
+      image: ${AGENT_SANDBOX_IMAGE:python:3.11-slim}
       network: "none"              # tool code gets no network; eztool() runs over stdin/stdout
       memory: "256m"
       cpus: "0.5"

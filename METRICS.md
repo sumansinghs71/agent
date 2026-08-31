@@ -36,6 +36,11 @@ no suite.
 | `LOCAL` execution cannot start silently | startup | `-Dtest=SandboxModeStartupTest` | `SandboxModeStartupTest` | **throws without opt-in** |
 | Cloud metadata endpoints are blocked | SSRF verdict | `-Dtest=SsrfGuardTest` | `SsrfGuardTest` | **blocked** |
 | Header CRLF injection is rejected | exception | `-Dtest=RestHeaderPolicyTest` | `RestHeaderPolicyTest` | **rejected** |
+| A JavaScript infinite loop is terminated | termination cause | `-Dtest=JavaScriptSandboxTest` | `JavaScriptSandboxTest` | `STATEMENT_LIMIT` |
+| A runaway script does not permanently hold a thread | pool reuse | same | same | **pool usable afterwards** |
+| JavaScript cannot reach the JVM | evaluation | same | same | **all 5 routes denied** |
+| Sandbox concurrency never exceeds capacity | peak in flight | `-Dtest=SandboxConcurrencyLimiterTest` | `SandboxConcurrencyLimiterTest` | **peak <= capacity under 32 threads** |
+| Saturation refuses rather than queueing forever | elapsed | same | same | **refused promptly** |
 | No secrets in the working tree | gitleaks | `gitleaks detect --no-git --source . --config .gitleaks.toml` | `SECRET_SCAN_REPORT.md` | **no leaks found** |
 
 **Sandbox attack matrix: 15/15 blocked.** Full expected-vs-observed table in
@@ -80,8 +85,8 @@ no suite.
 
 | Metric | Command | Observed |
 |---|---|---|
-| Total tests | `./mvnw clean verify` | **246, 0 failures, 0 errors** |
-| Coverage, overall | JaCoCo | **40.4%** |
+| Total tests | `./mvnw clean verify` | **263, 0 failures, 0 errors** |
+| Coverage, overall | JaCoCo | **41.7%** |
 | Coverage, `runtime.model` | JaCoCo | **100.0%** |
 | Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
 | Coverage, `runtime.state` | JaCoCo | **97.7%** |

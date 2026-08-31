@@ -56,6 +56,29 @@ public class DockerSandbox implements PythonSandbox {
         return ID;
     }
 
+    /**
+     * Warn when the sandbox image is identified by a mutable tag.
+     *
+     * <p>A tag can be repointed by whoever controls the upstream repository, so a tag-pinned sandbox
+     * image is a supply-chain dependency that can change without any change here. A digest names one
+     * exact image and cannot be repointed.
+     *
+     * <p>This warns rather than refuses: requiring a digest would break every developer running from
+     * a locally built image, and the right default for a lab is loud rather than obstructive.
+     * Production configuration should pin.
+     */
+    @jakarta.annotation.PostConstruct
+    void warnIfImageIsNotDigestPinned() {
+        String image = config.getPython().getDocker().getImage();
+        if (image != null && !image.contains("@sha256:")) {
+            log.warn("Sandbox image '{}' is pinned by TAG, not by digest. A tag can be repointed "
+                    + "upstream without any change here. Pin by digest in production: "
+                    + "tool-execution.python.docker.image=<name>@sha256:<digest>", image);
+        } else {
+            log.info("Sandbox image is digest-pinned: {}", image);
+        }
+    }
+
     @Override
     public SandboxHandle launch(Path scriptPath, String executionId, long timeoutMs) throws IOException {
         ToolExecutionProperties.DockerConfig docker = config.getPython().getDocker();
