@@ -91,6 +91,11 @@ Result: **36 commits in, 36 commits out.** No history was dropped; only literal 
 | `release` | `35ca826` | `ac1611b` |
 | `Intent-Classification` | `55ee3db` | `7dc3f33` |
 
+> **Note.** A later, unrelated rewrite removed AI-assistant attribution trailers from twelve commit
+> messages, which changed the SHAs on `main` and `DAG` again. The values above are the ones this
+> operation produced and are left as recorded; `a0a0b7c` is therefore no longer reachable. The
+> table documents what this purge did, not the repository's current tips.
+
 ## 4.2 Fresh-clone verification (post-push)
 
 ```bash
