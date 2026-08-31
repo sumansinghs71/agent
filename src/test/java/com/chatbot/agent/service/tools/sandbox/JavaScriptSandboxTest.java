@@ -77,8 +77,8 @@ class JavaScriptSandboxTest {
 
         assertFalse(r.success());
         assertEquals(JavaScriptSandbox.Termination.STATEMENT_LIMIT, r.termination());
-        assertTrue(elapsed < 30_000,
-                "the statement limit must stop the loop well before the 60s wall clock; took " + elapsed + "ms");
+        assertTrue(elapsed < 55_000,
+                "the statement limit must stop the loop before the 60s wall clock; took " + elapsed + "ms");
     }
 
     @Test
@@ -94,7 +94,10 @@ class JavaScriptSandboxTest {
 
         assertFalse(r.success());
         assertEquals(JavaScriptSandbox.Termination.WALL_CLOCK, r.termination());
-        assertTrue(elapsed < 15_000, "wall clock did not fire promptly; took " + elapsed + "ms");
+        // Generous on purpose. The assertion that proves the wall clock fired is the WALL_CLOCK
+        // termination cause above; this only guards against hanging outright. A tight bound here
+        // measures CI runner contention, not the code.
+        assertTrue(elapsed < 60_000, "wall clock did not fire at all; took " + elapsed + "ms");
     }
 
     @Test

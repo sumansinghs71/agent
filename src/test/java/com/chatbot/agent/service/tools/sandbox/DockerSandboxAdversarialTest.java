@@ -395,7 +395,9 @@ class DockerSandboxAdversarialTest {
 
         assertFalse(o.succeeded(), "an infinite loop must not exit successfully");
         // hardTimeoutSeconds is 5 in this fixture; allow generous slack for container startup.
-        assertTrue(elapsed < 25_000,
+        // The proof that the timeout fired is the non-zero exit above. This bound only catches a
+        // container that never terminated; a tight value would measure daemon contention.
+        assertTrue(elapsed < TIMEOUT_MS,
                 "loop ran for " + elapsed + "ms; the in-container timeout did not fire");
     }
 

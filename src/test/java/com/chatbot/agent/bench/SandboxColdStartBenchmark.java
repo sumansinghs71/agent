@@ -30,8 +30,15 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Results are written to {@code benchmarks/results/} alongside the captured environment. They are
  * local reproducible measurements on one machine, not a capacity claim.
+ *
+ * <p>Tagged {@code benchmark} and EXCLUDED from the default test run. A measurement is not a
+ * correctness assertion: on a contended shared runner it competes with everything else for the
+ * Docker daemon, and a timing figure that varies with load turns the correctness gate flaky. A
+ * flaky gate is worse than a missing one, because it teaches everyone to re-run until green.
+ * Run explicitly with {@code -Dgroups=benchmark}.
  */
 @EnabledIf("dockerAvailable")
+@org.junit.jupiter.api.Tag("benchmark")
 class SandboxColdStartBenchmark {
 
     private static final int SAMPLES = 15;
