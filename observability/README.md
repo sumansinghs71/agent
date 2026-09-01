@@ -1,5 +1,11 @@
 # Observability
 
+> **Status.** Micrometer metrics are wired through the runtime and exported at
+> `/actuator/prometheus`. The span model below is **defined but not emitted**: no runtime code opens
+> a span and no exporter is configured. `LogRedactor` is implemented and tested but is not yet wired
+> into the logging pipeline. Both are tracked in
+> [../docs/KNOWN_LIMITATIONS.md](../docs/KNOWN_LIMITATIONS.md).
+
 ## Dashboard
 
 [`grafana/agent-runtime-dashboard.json`](grafana/agent-runtime-dashboard.json) — ten panels chosen to

@@ -1,14 +1,16 @@
 # Metrics and Claim Evidence
 
 Every substantive claim made about this repository maps to a command you can run and an artifact you
-can inspect. **No number in this file was estimated, projected, or written before it was observed.**
+can inspect. **Every number in this file was transcribed from an artifact after the command that
+produced it was run**, with one labelled exception: the ablation token counts are structural
+estimates, not measured model usage. They are marked as such where they appear.
 
-Last verified: 2026-08-31, on `DAG`.
+Last verified: 2026-08-31, on `main`.
 
 ## How to reproduce everything
 
 ```bash
-git clone https://github.com/sumansinghs71/agent.git && cd agent && git checkout DAG
+git clone https://github.com/sumansinghs71/agent-runtime-lab.git && cd agent-runtime-lab
 docker pull postgres:16-alpine && docker pull python:3.11-slim
 ./mvnw clean verify
 ```
@@ -36,7 +38,7 @@ no suite.
 | `LOCAL` execution cannot start silently | startup | `-Dtest=SandboxModeStartupTest` | `SandboxModeStartupTest` | **throws without opt-in** |
 | Cloud metadata endpoints are blocked | SSRF verdict | `-Dtest=SsrfGuardTest` | `SsrfGuardTest` | **blocked** |
 | Header CRLF injection is rejected | exception | `-Dtest=RestHeaderPolicyTest` | `RestHeaderPolicyTest` | **rejected** |
-| A JavaScript infinite loop is terminated | termination cause | `-Dtest=JavaScriptSandboxTest` | `JavaScriptSandboxTest` | `STATEMENT_LIMIT` |
+| A JavaScript infinite loop is terminated **in `JavaScriptSandbox`, which is not yet wired into the live path** | termination cause | `-Dtest=JavaScriptSandboxTest` | `JavaScriptSandboxTest` | `STATEMENT_LIMIT` |
 | A runaway script does not permanently hold a thread | pool reuse | same | same | **pool usable afterwards** |
 | JavaScript cannot reach the JVM | evaluation | same | same | **all 5 routes denied** |
 | Sandbox concurrency never exceeds capacity | peak in flight | `-Dtest=SandboxConcurrencyLimiterTest` | `SandboxConcurrencyLimiterTest` | **peak <= capacity under 32 threads** |
@@ -135,18 +137,18 @@ the coordination layer duplicates them at three extra model calls per run.
 | Metric | Command | Observed |
 |---|---|---|
 | Total tests | `./mvnw clean verify` | **310, 0 failures, 0 errors** |
-| Coverage, overall | JaCoCo | **42.6%** |
-| Coverage, `runtime.model` | JaCoCo | **100.0%** |
-| Coverage, `runtime.persistence` | JaCoCo | **99.0%** |
-| Coverage, `runtime.state` | JaCoCo | **97.7%** |
-| Coverage, `runtime.graph` | JaCoCo | **91.3%** |
-| Coverage, `runtime.exec` | JaCoCo | **89.9%** |
-| Coverage, `service.policy` | JaCoCo | **89.9%** |
-| Coverage, `runtime.approval` | JaCoCo | **93.3%** |
-| Coverage, `runtime.plan` | JaCoCo | **92.6%** |
-| Coverage, `tools.mcp` | JaCoCo | **91.3%** |
-| Coverage, `tools.registry` | JaCoCo | **82.3%** |
-| Coverage, `service.tools.sandbox` | JaCoCo | **82.4%** |
+| Coverage, overall | JaCoCo, line | **43.6%** (instruction coverage is 33.3%) |
+| Coverage, `runtime.model` | JaCoCo, line | **100.0%** |
+| Coverage, `runtime.persistence` | JaCoCo, line | **99.0%** |
+| Coverage, `runtime.state` | JaCoCo, line | **97.7%** |
+| Coverage, `runtime.graph` | JaCoCo, line | **91.3%** |
+| Coverage, `runtime.exec` | JaCoCo, line | **91.4%** |
+| Coverage, `service.policy` | JaCoCo, line | **86.6%** |
+| Coverage, `runtime.approval` | JaCoCo, line | **93.3%** |
+| Coverage, `runtime.plan` | JaCoCo, line | **92.6%** |
+| Coverage, `tools.mcp` | JaCoCo, line | **91.3%** |
+| Coverage, `tools.registry` | JaCoCo, line | **82.3%** |
+| Coverage, `service.tools.sandbox` | JaCoCo, line | **87.4%** |
 | SBOM components | CycloneDX | **207** |
 
 Overall coverage is low **because the pre-existing reasoning, retrieval and citation services are
@@ -175,8 +177,7 @@ capability claim anywhere in this repository.
 |---|---|
 | Reasoning service migrated onto the runtime | `RuntimeBackedAgentService` is the supported path and is tested; the legacy reasoning service still calls the tool executor directly |
 | MCP over stdio | The protocol layer is real and tested over an in-process transport; an out-of-process transport is not implemented |
-| Retrieval Recall@K / MRR / NDCG | No golden dataset yet (M5) |
-| Single-agent vs multi-agent ablation | Multi-agent not implemented (M7) |
+| Retrieval Recall@K / MRR / NDCG | No golden dataset |
 | Concurrent run throughput | No load harness exists |
 | PostgreSQL checkpoint and node-claim latency | Dominated by the database; needs a controlled instance |
 | Tracing overhead | No exporter configured, so a figure would measure nothing representative |

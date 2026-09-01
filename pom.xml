@@ -16,7 +16,7 @@
     <description>A production-oriented agent harness for stateful tool use, durable DAG execution,
         MCP integration, human approvals, isolated code execution, replay, evaluation, and failure
         recovery.</description>
-    <url>https://github.com/sumansinghs71/agent</url>
+    <url>https://github.com/sumansinghs71/agent-runtime-lab</url>
 
     <licenses>
         <license>

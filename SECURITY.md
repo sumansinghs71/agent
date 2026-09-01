@@ -19,15 +19,18 @@ repository rather than a public issue.
 
 ## Disclosed incident: credentials committed to history
 
-This repository previously contained two credentials in tracked files, present since the initial
-commit:
+This repository previously contained three credentials in tracked files:
 
 - an Azure OpenAI API key
 - a MySQL `root` password
+- an Azure Search key, found during the history rewrite rather than the original M0 audit
 
 Both were identified in the M0 audit, **have been removed from the working tree**, and have been
-rotated by the repository owner. They remain present in git history pending an approved history
-rewrite — see [docs/security/GIT_HISTORY_PURGE_RESULT.md](docs/security/GIT_HISTORY_PURGE_RESULT.md).
+rotated by the repository owner. History was rewritten across the five authorized branches on
+2026-08-30 and verified clean from a fresh clone; the two additional branches that still carried the
+values have since been deleted. Seven GitHub-managed `refs/pull/*` references still contain them and
+cannot be altered by any push — only GitHub Support can remove them — see
+[docs/security/GIT_HISTORY_PURGE_RESULT.md](docs/security/GIT_HISTORY_PURGE_RESULT.md).
 
 This is documented rather than quietly scrubbed, for two reasons. Rotation, not history rewriting,
 is what actually closed the exposure — the values were public and must be assumed harvested. And

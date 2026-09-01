@@ -11,7 +11,7 @@ described is not a posture, and a capability list without its complement reads a
 | **The code denylist is lint, not a boundary** | Behavioural testing found that 9 of 10 candidate payloads pass it — `importlib.import_module('os')`, whitespace variants, stdlib re-exports. It is retained as defence-in-depth and named `lintPythonCodeBestEffort` so it cannot be mistaken for containment. |
 | **Sandbox image ships tag-pinned** | The default is a tag, which upstream can repoint. Startup warns while a tag is configured, and the resolved digest is recorded in `application.yml` for production use. This warns rather than refuses, because requiring a digest would break every developer running a locally built image. |
 | **Sandbox concurrency is capped per process, not per host** | `SandboxConcurrencyLimiter` bounds executions in flight within one JVM. Several JVMs against one Docker daemon are not coordinated. |
-| **JavaScript memory is not directly capped** | Statement limit and wall clock bound CPU, and unbounded allocation is terminated in practice by whichever fires first. There is no explicit heap ceiling per execution, so a script allocating quickly within its statement budget can still pressure the JVM heap. |
+| **The bounded JavaScript sandbox is not wired in** | `JavaScriptSandbox` enforces a GraalJS statement limit and a wall-clock cancel and is covered by 13 tests, but no production code instantiates it. The live path (`ToolExecutionService` → `PythonJavaScriptToolExecutor`) still uses JSR-223, so a tight JavaScript loop holds a thread-pool slot until the JVM restarts. Even once wired, the sandbox caps statements and wall clock but sets no explicit per-execution heap ceiling. |
 
 ## Network
 
@@ -41,7 +41,7 @@ described is not a posture, and a capability list without its complement reads a
 | Limitation | Detail |
 |---|---|
 | **Development-grade identity** | An in-memory user store with three shared accounts, reading passwords from the environment and refusing to start without them. Not an identity provider. |
-| **No measured performance** | **No benchmark of any kind has been run.** There is no latency, throughput, or capacity figure anywhere in this repository, and none should be inferred. |
+| **No production capacity measurement** | Benchmarks have been run, but only locally on one developer machine — Docker sandbox cold start (p50 272 ms, n=13), JavaScript context startup (p50 9 ms, n=30) and in-process JMH figures, published in [PERFORMANCE.md](PERFORMANCE.md). Several JMH measurements carry an error estimate larger than the score. Concurrent run throughput, PostgreSQL checkpoint and node-claim latency, MCP invocation overhead, tracing overhead, and CPU and memory under load are not measured; no load test exists. |
 | **Never deployed** | Not load-tested, not run against production traffic. |
 | **Coverage is uneven** | Runtime and security packages are 82–100%; the pre-existing reasoning, retrieval and citation services are near zero. |
 
@@ -50,9 +50,11 @@ described is not a posture, and a capability list without its complement reads a
 Three credentials were committed to this repository and are present in its history. They have been
 rotated. History was rewritten across the five main branches, verified clean from a fresh clone.
 
-Two automation-created branches and seven GitHub-managed pull-request refs still contain the
-original values. Pull-request refs cannot be altered by any push — only GitHub Support can remove
-them. Anyone who forked or cloned before the rewrite retains the values regardless.
+Seven GitHub-managed pull-request refs still contain the original values, and are now the only known
+repository-hosted stale references that do — the two automation-created branches that also carried
+them were backed up locally and deleted after authorization. Pull-request refs cannot be altered by
+any push — only GitHub Support can remove them. Anyone who forked or cloned before the rewrite
+retains the values regardless.
 
 **Rotation is what closed the exposure. The rewrite was repository hygiene.** Detail in
 [security/GIT_HISTORY_PURGE_RESULT.md](security/GIT_HISTORY_PURGE_RESULT.md).
@@ -69,7 +71,19 @@ them. Anyone who forked or cloned before the rewrite retains the values regardle
 
 ## Not implemented
 
-Evaluation harness, failure-injection library, multi-agent coordination, OpenTelemetry tracing,
-benchmarks.
+**OpenTelemetry emission.** `AgentTracing` and `FailureLayer` declare the span and attribution model,
+but no runtime code opens a span and no exporter is configured, so nothing is emitted. Micrometer
+metrics are the live signal.
+
+**Log-redaction wiring.** `LogRedactor` is implemented and tested (30 tests, including a negative
+control), but application logging still uses the default pattern encoder, so redaction is not applied
+to emitted logs.
+
+**Java package rename.** The repository and Maven artifact are `agent-runtime-lab`; the internal
+package is still `com.chatbot.agent`. See [adr/0004-project-identity-and-package-naming.md](adr/0004-project-identity-and-package-naming.md).
+
+The evaluation harness, failure-injection library, multi-agent coordination and benchmarks that this
+section previously listed are implemented — see [EVALUATIONS.md](EVALUATIONS.md),
+[MULTI_AGENT_ABLATION.md](MULTI_AGENT_ABLATION.md) and [PERFORMANCE.md](PERFORMANCE.md).
 
 [../METRICS.md](../METRICS.md) states which claims are evidenced and which are not.

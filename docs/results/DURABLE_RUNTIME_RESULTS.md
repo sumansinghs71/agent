@@ -155,7 +155,7 @@ Verified end to end against real PostgreSQL:
 ## 6. Reproduction
 
 ```bash
-git clone https://github.com/sumansinghs71/agent.git && cd agent && git checkout DAG
+git clone https://github.com/sumansinghs71/agent-runtime-lab.git && cd agent-runtime-lab
 docker pull postgres:16-alpine
 ./mvnw clean verify
 

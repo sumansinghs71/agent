@@ -58,7 +58,8 @@ arms.
 tokens regardless of plan size, so at 1 step it is 4× and at 10 steps it is still 4×. It never
 amortises, because the coordination is per-run rather than per-step.
 
-**Latency was not meaningfully different** (36–50ms in both arms at most sizes) — the specialists are
+**Latency was not meaningfully different** (within 4ms between arms at four of the five scenarios;
+92 vs 37ms under the injected HTTP 500) — the specialists are
 deterministic stand-ins with no network cost. With real model calls the multi-agent arm would be
 strictly slower by roughly three additional round trips.
 

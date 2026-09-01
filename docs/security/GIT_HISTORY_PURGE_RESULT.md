@@ -1,7 +1,7 @@
 # Git History Purge — Result
 
 **Executed:** 2026-08-30 · **Tool:** `git-filter-repo` 2.47.0
-**Repository:** `https://github.com/sumansinghs71/agent`
+**Repository:** `https://github.com/sumansinghs71/agent-runtime-lab` (named `agent` at the time of this operation)
 
 > No secret value appears in this document. Secrets are referenced as `S1`, `S2`, `S3`.
 
